@@ -55,6 +55,7 @@ pub(all) enum ContractDiagnosticCode {
   UndeclaredTemplatePath
   MissingRequiredField
   TypeMismatch
+  ConstraintViolation
   UnexpectedField
   UnusedSchemaField
   NoSamples
@@ -87,6 +88,7 @@ pub(all) struct ContractReport {
 pub struct ContractSchema {
   fields : Array[ContractField]
   open_object_paths : Array[String]
+  value_constraints : Array[(String, Json)]
 }
 
 ///|
@@ -111,13 +113,14 @@ priv struct TemplateReference {
 pub fn ContractSchema::new(
   fields : Array[ContractField],
 ) -> ContractSchema raise ContractError {
-  contract_schema_new(fields, [])
+  contract_schema_new(fields, [], [])
 }
 
 ///|
 fn contract_schema_new(
   fields : Array[ContractField],
   open_object_paths : Array[String],
+  value_constraints : Array[(String, Json)],
 ) -> ContractSchema raise ContractError {
   let copied : Array[ContractField] = []
   let by_path : Map[String, ContractField] = Map([])
@@ -146,7 +149,12 @@ fn contract_schema_new(
       raise InvalidFieldPath(path)
     }
   }
-  { fields: copied, open_object_paths, }
+  for (path, _) in value_constraints {
+    if path != "" && parse_contract_path(path) is None {
+      raise InvalidFieldPath(path)
+    }
+  }
+  { fields: copied, open_object_paths, value_constraints, }
 }
 
 ///|
@@ -327,6 +335,10 @@ fn contract_codes_equal(
     | (
       ContractDiagnosticCode::TypeMismatch,
       ContractDiagnosticCode::TypeMismatch,
+    )
+    | (
+      ContractDiagnosticCode::ConstraintViolation,
+      ContractDiagnosticCode::ConstraintViolation,
     )
     | (
       ContractDiagnosticCode::UnexpectedField,

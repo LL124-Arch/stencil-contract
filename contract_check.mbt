@@ -285,6 +285,7 @@ fn contract_diagnostic_group(code : ContractDiagnosticCode) -> Int {
     ContractDiagnosticCode::UnusedSchemaField => 1
     ContractDiagnosticCode::MissingRequiredField
     | ContractDiagnosticCode::TypeMismatch
+    | ContractDiagnosticCode::ConstraintViolation
     | ContractDiagnosticCode::UnexpectedField
     | ContractDiagnosticCode::NoSamples => 2
   }
@@ -299,9 +300,10 @@ fn contract_diagnostic_code_rank(code : ContractDiagnosticCode) -> Int {
     ContractDiagnosticCode::UndeclaredTemplatePath => 3
     ContractDiagnosticCode::MissingRequiredField => 4
     ContractDiagnosticCode::TypeMismatch => 5
-    ContractDiagnosticCode::UnexpectedField => 6
-    ContractDiagnosticCode::UnusedSchemaField => 7
-    ContractDiagnosticCode::NoSamples => 8
+    ContractDiagnosticCode::ConstraintViolation => 6
+    ContractDiagnosticCode::UnexpectedField => 7
+    ContractDiagnosticCode::UnusedSchemaField => 8
+    ContractDiagnosticCode::NoSamples => 9
   }
 }
 
@@ -665,6 +667,9 @@ fn contract_validate_sample(
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
+  contract_validate_value_constraints(
+    schema, "", sample, "", source, diagnostics,
+  )
   match sample {
     Object(_) => {
       for field in schema.fields {
@@ -779,6 +784,9 @@ fn contract_validate_path_value(
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
+  contract_validate_value_constraints(
+    schema, schema_path, value, instance_path, source, diagnostics,
+  )
   if array_depth > 0 {
     match value {
       Array(items) => {
@@ -857,6 +865,169 @@ fn contract_validate_path_value(
         }
     }
   }
+}
+
+///|
+fn contract_validate_value_constraints(
+  schema : ContractSchema,
+  schema_path : String,
+  value : Json,
+  instance_path : String,
+  source : String,
+  diagnostics : Array[ContractDiagnostic],
+) -> Unit {
+  for (constraint_path, constraint_json) in schema.value_constraints {
+    if constraint_path == schema_path {
+      match constraint_json {
+        Object(keywords) => {
+          match keywords.get("enum") {
+            Some(Array(values)) => {
+              let mut matches = false
+              for allowed in values {
+                if Json::equal(value, allowed) {
+                  matches = true
+                }
+              }
+              if !matches {
+                contract_add_constraint_violation(
+                  source,
+                  schema_path,
+                  instance_path,
+                  "one of " + Json::array(values).stringify(),
+                  value.stringify(),
+                  "value is not in the allowed enum at \{schema_path}",
+                  diagnostics,
+                )
+              }
+            }
+            _ => ()
+          }
+
+          match keywords.get("const") {
+            Some(expected) if !Json::equal(value, expected) =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "equal to " + expected.stringify(),
+                value.stringify(),
+                "value does not match const at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("minimum")) {
+            (Number(actual, ..), Some(Number(minimum, ..))) if actual < minimum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                ">= " + minimum.to_string(),
+                actual.to_string(),
+                "number is below minimum at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("maximum")) {
+            (Number(actual, ..), Some(Number(maximum, ..))) if actual > maximum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "<= " + maximum.to_string(),
+                actual.to_string(),
+                "number is above maximum at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("exclusiveMinimum")) {
+            (Number(actual, ..), Some(Number(minimum, ..))) if actual <= minimum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "> " + minimum.to_string(),
+                actual.to_string(),
+                "number does not exceed exclusive minimum at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("exclusiveMaximum")) {
+            (Number(actual, ..), Some(Number(maximum, ..))) if actual >= maximum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "< " + maximum.to_string(),
+                actual.to_string(),
+                "number does not meet exclusive maximum at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("minItems")) {
+            (Array(items), Some(Number(minimum, ..))) if items
+              .length()
+              .to_double() <
+              minimum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at least \{minimum.to_string()} items",
+                "\{items.length()} items",
+                "array has fewer than minItems at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("maxItems")) {
+            (Array(items), Some(Number(maximum, ..))) if items
+              .length()
+              .to_double() >
+              maximum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at most \{maximum.to_string()} items",
+                "\{items.length()} items",
+                "array has more than maxItems at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
+fn contract_add_constraint_violation(
+  source : String,
+  path : String,
+  instance_path : String,
+  expected : String,
+  actual : String,
+  message : String,
+  diagnostics : Array[ContractDiagnostic],
+) -> Unit {
+  contract_add_diagnostic_at(
+    diagnostics,
+    ContractSeverity::Error,
+    ContractDiagnosticCode::ConstraintViolation,
+    source,
+    path,
+    Some(instance_path),
+    expected,
+    actual,
+    message,
+  )
 }
 
 ///|

@@ -40,6 +40,7 @@ pub(all) enum ContractDiagnosticCode {
   UndeclaredTemplatePath
   MissingRequiredField
   TypeMismatch
+  ConstraintViolation
   UnexpectedField
   UnusedSchemaField
   NoSamples
@@ -75,6 +76,7 @@ pub fn ContractReport::to_json(Self) -> Json
 pub struct ContractSchema {
   fields : Array[ContractField]
   open_object_paths : Array[String]
+  value_constraints : Array[(String, Json)]
 }
 pub fn ContractSchema::from_json_schema(Json) -> Self raise ContractError
 pub fn ContractSchema::new(Array[ContractField]) -> Self raise ContractError

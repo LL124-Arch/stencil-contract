@@ -66,10 +66,13 @@ JSON Pointer references into `$defs` or `definitions` are expanded at each
 use site, including references inside array `items`. Pointer tokens decode
 `~1` and `~0` for `/` and `~`. External or recursive references and validation
 keywords next to `$ref` return `ContractError`. Nested `$id` resource scopes
-are also rejected because they change how relative references resolve. Other
-unsupported constraints such as `minimum`, `pattern`, and `enum` are rejected
-rather than discarded. The root remains subject to this checker's Object
-requirement.
+are also rejected because they change how relative references resolve. The
+importer checks `enum`, `const`, numeric `minimum`/`maximum` and exclusive
+bounds, and array `minItems`/`maxItems`. A failed assertion produces a
+`constraint_violation` diagnostic with the schema path and concrete instance
+path. Other constraints such as `pattern`, string lengths, `multipleOf`, and
+`uniqueItems` return `ContractError` instead of being discarded. The root
+remains subject to this checker's Object requirement.
 
 ```moonbit
 let imported_schema = @contract.ContractSchema::from_json_schema({
@@ -78,7 +81,13 @@ let imported_schema = @contract.ContractSchema::from_json_schema({
   "required": ["id"],
   "properties": {
     "id": { "type": "integer" },
-    "labels": { "type": "array", "items": { "type": "string" } },
+    "status": { "enum": ["draft", "published"] },
+    "score": { "type": "number", "minimum": 0, "exclusiveMaximum": 100 },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+    },
   },
 })
 ```
@@ -125,7 +134,7 @@ For consecutive nested arrays, schema paths retain each wildcard while
 `instance_path` records every concrete array index. For example,
 `matrix[][].name` can report `instance_path = Some("/matrix/1/0/name")`.
 
-Diagnostics have a stable order: template and partial issues first, schema warnings next, then sample issues in input order, schema path, and concrete instance path order. `ContractDiagnosticCode` distinguishes syntax errors, partial errors, undeclared template paths, sample validation errors, unused schema fields, and an empty sample list. `ContractReport::is_valid()` is false when any error is present; unused schema fields are warnings.
+Diagnostics have a stable order: template and partial issues first, schema warnings next, then sample issues in input order, schema path, and concrete instance path order. `ContractDiagnosticCode` distinguishes syntax errors, partial errors, undeclared template paths, type and value-constraint failures, unexpected sample fields, unused schema fields, and an empty sample list. `ContractReport::is_valid()` is false when any error is present; unused schema fields are warnings.
 
 Export a report for CI logs or another tool with `ContractReport::to_json()`.
 The JSON contains a `valid` flag and ordered diagnostics with stable snake-case

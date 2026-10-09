@@ -13,10 +13,11 @@ pub fn ContractSchema::from_json_schema(
   let fields : Array[ContractField] = []
   let open_object_paths : Array[String] = []
   let active_refs : Array[String] = []
+  let value_constraints : Array[(String, Json)] = []
   contract_import_json_schema_node(
-    schema, schema, "", false, true, fields, open_object_paths, active_refs,
+    schema, schema, "", false, true, fields, open_object_paths, active_refs, value_constraints,
   )
-  contract_schema_new(fields, open_object_paths)
+  contract_schema_new(fields, open_object_paths, value_constraints)
 }
 
 ///|
@@ -29,6 +30,7 @@ fn contract_import_json_schema_node(
   fields : Array[ContractField],
   open_object_paths : Array[String],
   active_refs : Array[String],
+  value_constraints : Array[(String, Json)],
 ) -> Unit raise ContractError {
   match schema {
     True =>
@@ -54,7 +56,7 @@ fn contract_import_json_schema_node(
       if keywords.contains("$ref") {
         contract_import_json_schema_reference(
           root_schema, keywords, path, required, is_root, fields, open_object_paths,
-          active_refs,
+          active_refs, value_constraints,
         )
         return
       }
@@ -65,6 +67,10 @@ fn contract_import_json_schema_node(
             keyword,
           )
         }
+      }
+      match contract_parse_json_schema_value_constraint(keywords, path) {
+        Some(constraint) => value_constraints.push((path, constraint))
+        None => ()
       }
 
       let properties = match keywords.get("properties") {
@@ -186,6 +192,7 @@ fn contract_import_json_schema_node(
                 fields,
                 open_object_paths,
                 active_refs,
+                value_constraints,
               )
             }
           None => ()
@@ -226,6 +233,7 @@ fn contract_import_json_schema_node(
               fields,
               open_object_paths,
               active_refs,
+              value_constraints,
             )
           None =>
             fields.push({
@@ -250,6 +258,7 @@ fn contract_import_json_schema_reference(
   fields : Array[ContractField],
   open_object_paths : Array[String],
   active_refs : Array[String],
+  value_constraints : Array[(String, Json)],
 ) -> Unit raise ContractError {
   let reference = match keywords.get("$ref") {
     Some(String(reference)) => reference
@@ -279,6 +288,7 @@ fn contract_import_json_schema_reference(
   active_refs.push(reference)
   contract_import_json_schema_node(
     root_schema, target, path, required, is_root, fields, open_object_paths, active_refs,
+    value_constraints,
   )
   ignore(active_refs.pop())
 }
@@ -360,6 +370,99 @@ fn contract_validate_json_schema_definitions(
 }
 
 ///|
+fn contract_parse_json_schema_value_constraint(
+  keywords : Map[String, Json],
+  path : String,
+) -> Json? raise ContractError {
+  match keywords.get("enum") {
+    Some(Array(values)) if values.length() > 0 => {
+      for i = 0; i < values.length(); i = i + 1 {
+        for j = i + 1; j < values.length(); j = j + 1 {
+          if Json::equal(values[i], values[j]) {
+            raise InvalidJsonSchema(
+              contract_json_schema_path_label(path) + ".enum",
+            )
+          }
+        }
+      }
+      ()
+    }
+    Some(_) =>
+      raise InvalidJsonSchema(contract_json_schema_path_label(path) + ".enum")
+    None => ()
+  }
+  ignore(contract_json_schema_number_keyword(keywords, "minimum", path))
+  ignore(contract_json_schema_number_keyword(keywords, "maximum", path))
+  ignore(
+    contract_json_schema_number_keyword(keywords, "exclusiveMinimum", path),
+  )
+  ignore(
+    contract_json_schema_number_keyword(keywords, "exclusiveMaximum", path),
+  )
+  ignore(contract_json_schema_count_keyword(keywords, "minItems", path))
+  ignore(contract_json_schema_count_keyword(keywords, "maxItems", path))
+  let constraint_keywords : Map[String, Json] = Map([])
+  for
+    name in [
+      "enum", "const", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+      "minItems", "maxItems",
+    ] {
+    match keywords.get(name) {
+      Some(value) => constraint_keywords.set(name, value)
+      None => ()
+    }
+  }
+  if constraint_keywords.is_empty() {
+    None
+  } else {
+    Some(Json::object(constraint_keywords))
+  }
+}
+
+///|
+fn contract_json_schema_number_keyword(
+  keywords : Map[String, Json],
+  keyword : String,
+  path : String,
+) -> Double? raise ContractError {
+  match keywords.get(keyword) {
+    Some(Number(value, ..)) => {
+      let representation = value.to_string()
+      if value == value &&
+        representation != "Infinity" &&
+        representation != "-Infinity" {
+        Some(value)
+      } else {
+        raise InvalidJsonSchema(
+          contract_json_schema_path_label(path) + "." + keyword,
+        )
+      }
+    }
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + "." + keyword,
+      )
+    None => None
+  }
+}
+
+///|
+fn contract_json_schema_count_keyword(
+  keywords : Map[String, Json],
+  keyword : String,
+  path : String,
+) -> Double? raise ContractError {
+  match contract_json_schema_number_keyword(keywords, keyword, path) {
+    Some(value) if value >= 0.0 && value.floor() == value => Some(value)
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + "." + keyword,
+      )
+    None => None
+  }
+}
+
+///|
 fn contract_json_schema_kind(
   name : String,
   path : String,
@@ -387,6 +490,14 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "required"
     | "items"
     | "additionalProperties"
+    | "enum"
+    | "const"
+    | "minimum"
+    | "maximum"
+    | "exclusiveMinimum"
+    | "exclusiveMaximum"
+    | "minItems"
+    | "maxItems"
     | "$defs"
     | "definitions"
     | "$schema"
@@ -494,6 +605,7 @@ fn contract_diagnostic_code_name(code : ContractDiagnosticCode) -> String {
     ContractDiagnosticCode::UndeclaredTemplatePath => "undeclared_template_path"
     ContractDiagnosticCode::MissingRequiredField => "missing_required_field"
     ContractDiagnosticCode::TypeMismatch => "type_mismatch"
+    ContractDiagnosticCode::ConstraintViolation => "constraint_violation"
     ContractDiagnosticCode::UnexpectedField => "unexpected_field"
     ContractDiagnosticCode::UnusedSchemaField => "unused_schema_field"
     ContractDiagnosticCode::NoSamples => "no_samples"
