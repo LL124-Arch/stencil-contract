@@ -2,29 +2,33 @@
 /// Import the supported object-oriented subset of JSON Schema.
 ///
 /// Supported validation keywords are `type`, `properties`, `required`,
-/// `items`, and boolean `additionalProperties`. JSON Schema's default
-/// additional-properties behavior is preserved. Unsupported constraints raise
-/// `ContractError` instead of being silently discarded. The root schema must
-/// be compatible with the checker's object-root sample contract.
+/// `items`, boolean `additionalProperties`, and acyclic local JSON Pointer
+/// `$ref` references. JSON Schema's default additional-properties behavior is
+/// preserved. Unsupported constraints raise `ContractError` instead of being
+/// silently discarded. The root schema must be compatible with the checker's
+/// object-root sample contract.
 pub fn ContractSchema::from_json_schema(
   schema : Json,
 ) -> ContractSchema raise ContractError {
   let fields : Array[ContractField] = []
   let open_object_paths : Array[String] = []
+  let active_refs : Array[String] = []
   contract_import_json_schema_node(
-    schema, "", false, true, fields, open_object_paths,
+    schema, schema, "", false, true, fields, open_object_paths, active_refs,
   )
   contract_schema_new(fields, open_object_paths)
 }
 
 ///|
 fn contract_import_json_schema_node(
+  root_schema : Json,
   schema : Json,
   path : String,
   required : Bool,
   is_root : Bool,
   fields : Array[ContractField],
   open_object_paths : Array[String],
+  active_refs : Array[String],
 ) -> Unit raise ContractError {
   match schema {
     True =>
@@ -39,6 +43,21 @@ fn contract_import_json_schema_node(
         "false schema",
       )
     Object(keywords) => {
+      contract_validate_json_schema_definitions(keywords, path)
+      if keywords.contains("$id") &&
+        (path.length() > 0 || active_refs.length() > 0) {
+        raise UnsupportedJsonSchemaFeature(
+          contract_json_schema_path_label(path),
+          "nested $id resource scope",
+        )
+      }
+      if keywords.contains("$ref") {
+        contract_import_json_schema_reference(
+          root_schema, keywords, path, required, is_root, fields, open_object_paths,
+          active_refs,
+        )
+        return
+      }
       for (keyword, _) in keywords {
         if !contract_json_schema_keyword_is_supported(keyword) {
           raise UnsupportedJsonSchemaFeature(
@@ -159,12 +178,14 @@ fn contract_import_json_schema_node(
             for (name, property_schema) in property_map {
               let property_path = contract_join_path(path, name)
               contract_import_json_schema_node(
+                root_schema,
                 property_schema,
                 property_path,
                 required_names.contains(name),
                 false,
                 fields,
                 open_object_paths,
+                active_refs,
               )
             }
           None => ()
@@ -197,12 +218,14 @@ fn contract_import_json_schema_node(
             )
           Some(item_schema) =>
             contract_import_json_schema_node(
+              root_schema,
               item_schema,
               path + "[]",
               false,
               false,
               fields,
               open_object_paths,
+              active_refs,
             )
           None =>
             fields.push({
@@ -214,6 +237,125 @@ fn contract_import_json_schema_node(
       }
     }
     _ => raise InvalidJsonSchema(contract_json_schema_path_label(path))
+  }
+}
+
+///|
+fn contract_import_json_schema_reference(
+  root_schema : Json,
+  keywords : Map[String, Json],
+  path : String,
+  required : Bool,
+  is_root : Bool,
+  fields : Array[ContractField],
+  open_object_paths : Array[String],
+  active_refs : Array[String],
+) -> Unit raise ContractError {
+  let reference = match keywords.get("$ref") {
+    Some(String(reference)) => reference
+    _ =>
+      raise InvalidJsonSchema(contract_json_schema_path_label(path) + ".$ref")
+  }
+  for (keyword, _) in keywords {
+    if keyword != "$ref" &&
+      !contract_json_schema_annotation_keyword_is_supported(keyword) &&
+      keyword != "$defs" &&
+      keyword != "definitions" {
+      raise UnsupportedJsonSchemaFeature(
+        contract_json_schema_path_label(path),
+        "$ref sibling " + keyword,
+      )
+    }
+  }
+  if active_refs.contains(reference) {
+    raise UnsupportedJsonSchemaFeature(
+      contract_json_schema_path_label(path),
+      "recursive $ref",
+    )
+  }
+  let target = contract_resolve_json_schema_reference(
+    root_schema, reference, path,
+  )
+  active_refs.push(reference)
+  contract_import_json_schema_node(
+    root_schema, target, path, required, is_root, fields, open_object_paths, active_refs,
+  )
+  ignore(active_refs.pop())
+}
+
+///|
+fn contract_resolve_json_schema_reference(
+  root_schema : Json,
+  reference : String,
+  path : String,
+) -> Json raise ContractError {
+  if reference == "#" {
+    return root_schema
+  }
+  let pointer = match reference.view().strip_prefix("#/".view()) {
+    Some(pointer) => pointer
+    None =>
+      raise UnsupportedJsonSchemaFeature(
+        contract_json_schema_path_label(path),
+        "external or non-pointer $ref",
+      )
+  }
+  let mut current = root_schema
+  for raw_token in pointer.split("/".view()) {
+    let token = contract_decode_json_schema_pointer_token(
+      raw_token.to_owned(),
+      path,
+    )
+    current = match current {
+      Object(object) =>
+        match object.get(token) {
+          Some(value) => value
+          None =>
+            raise InvalidJsonSchema(
+              contract_json_schema_path_label(path) + ".$ref",
+            )
+        }
+      _ =>
+        raise InvalidJsonSchema(contract_json_schema_path_label(path) + ".$ref")
+    }
+  }
+  current
+}
+
+///|
+fn contract_decode_json_schema_pointer_token(
+  token : String,
+  path : String,
+) -> String raise ContractError {
+  let decoded = token
+    .view()
+    .replace_all(old="~1".view(), new="/".view())
+    .replace_all(old="~0".view(), new="~".view())
+    .to_owned()
+  let encoded = decoded
+    .view()
+    .replace_all(old="~".view(), new="~0".view())
+    .replace_all(old="/".view(), new="~1".view())
+    .to_owned()
+  if encoded != token {
+    raise InvalidJsonSchema(contract_json_schema_path_label(path) + ".$ref")
+  }
+  decoded
+}
+
+///|
+fn contract_validate_json_schema_definitions(
+  keywords : Map[String, Json],
+  path : String,
+) -> Unit raise ContractError {
+  for name in ["$defs", "definitions"] {
+    match keywords.get(name) {
+      Some(Object(_)) | None => ()
+      Some(_) =>
+        raise InvalidJsonSchema(
+          contract_json_schema_path_label(path) + "." + name,
+        )
+    }
   }
 }
 
@@ -245,7 +387,29 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "required"
     | "items"
     | "additionalProperties"
+    | "$defs"
+    | "definitions"
     | "$schema"
+    | "$id"
+    | "$anchor"
+    | "$comment"
+    | "title"
+    | "description"
+    | "default"
+    | "examples"
+    | "deprecated"
+    | "readOnly"
+    | "writeOnly" => true
+    _ => false
+  }
+}
+
+///|
+fn contract_json_schema_annotation_keyword_is_supported(
+  keyword : String,
+) -> Bool {
+  match keyword {
+    "$schema"
     | "$id"
     | "$anchor"
     | "$comment"

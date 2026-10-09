@@ -61,10 +61,15 @@ Import a supported JSON Schema directly with `ContractSchema::from_json_schema`.
 The importer flattens `properties`, `required`, primitive `type`, nested array
 `items`, and boolean `additionalProperties` into the contract paths above.
 JSON Schema's default `additionalProperties: true` is preserved per object;
-`false` rejects undeclared keys. `integer` maps to `Number`. Unsupported
-constraints such as `$ref`, `minimum`, `pattern`, and `enum` return a
-`ContractError` so their meaning is not silently lost. The root remains subject
-to this checker's Object requirement.
+`false` rejects undeclared keys. `integer` maps to `Number`. Acyclic local
+JSON Pointer references into `$defs` or `definitions` are expanded at each
+use site, including references inside array `items`. Pointer tokens decode
+`~1` and `~0` for `/` and `~`. External or recursive references and validation
+keywords next to `$ref` return `ContractError`. Nested `$id` resource scopes
+are also rejected because they change how relative references resolve. Other
+unsupported constraints such as `minimum`, `pattern`, and `enum` are rejected
+rather than discarded. The root remains subject to this checker's Object
+requirement.
 
 ```moonbit
 let imported_schema = @contract.ContractSchema::from_json_schema({
