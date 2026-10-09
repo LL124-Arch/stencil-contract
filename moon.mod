@@ -19,11 +19,11 @@ repository = "https://github.com/LL124-Arch/stencil-contract"
 
 license = "Apache-2.0"
 
-keywords = [ ]
+keywords = [ "template", "contract", "stencil" ]
 
 preferred_target = "wasm"
 
-description = "Scaffold for Stencil template data contract checks"
+description = "Static data contract checks for Stencil templates and partials"
 
 import {
   "LL124-Arch/stencil@0.1.5",

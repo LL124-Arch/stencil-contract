@@ -1,0 +1,84 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "LL124-Arch/stencil-contract"
+
+// Values
+pub fn check_contract(String, ContractSchema, Json) -> ContractReport
+
+pub fn check_contract_samples(String, Map[String, String], ContractSchema, Array[Json], ContractPathMode) -> ContractReport
+
+pub fn check_contract_with_context(String, ContractSchema, Json) -> ContractReport
+
+pub fn check_contract_with_partials(String, Map[String, String], ContractSchema, Json) -> ContractReport
+
+pub fn check_contract_with_partials_and_context(String, Map[String, String], ContractSchema, Json) -> ContractReport
+
+// Errors
+pub(all) suberror ContractError {
+  InvalidFieldPath(String)
+  DuplicateFieldPath(String)
+  InvalidParentKind(String, ContractKind, ContractKind)
+}
+
+// Types and methods
+pub(all) struct ContractDiagnostic {
+  severity : ContractSeverity
+  code : ContractDiagnosticCode
+  source : String
+  path : String
+  instance_path : String?
+  expected : String
+  actual : String
+  message : String
+}
+
+pub(all) enum ContractDiagnosticCode {
+  TemplateSyntax
+  MissingPartial
+  PartialCycle
+  UndeclaredTemplatePath
+  MissingRequiredField
+  TypeMismatch
+  UnexpectedField
+  UnusedSchemaField
+  NoSamples
+}
+
+pub(all) struct ContractField {
+  path : String
+  kind : ContractKind
+  required : Bool
+}
+
+pub(all) enum ContractKind {
+  Any
+  Null
+  Bool
+  Number
+  String
+  Array
+  Object
+}
+
+pub(all) enum ContractPathMode {
+  RootPaths
+  ContextAware
+}
+
+pub(all) struct ContractReport {
+  diagnostics : Array[ContractDiagnostic]
+}
+pub fn ContractReport::is_valid(Self) -> Bool
+
+pub struct ContractSchema {
+  fields : Array[ContractField]
+}
+pub fn ContractSchema::new(Array[ContractField]) -> Self raise ContractError
+
+pub(all) enum ContractSeverity {
+  Error
+  Warning
+}
+
+// Type aliases
+
+// Traits
