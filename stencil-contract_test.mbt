@@ -147,12 +147,12 @@ fn diagnostic_severity_matches(
 }
 
 ///|
-test "schema rejects invalid and duplicate paths" {
+test "schema rejects malformed and duplicate paths" {
   let invalid = try {
     ignore(
       @stencil-contract.ContractSchema::new([
         {
-          path: "users[][]",
+          path: "users[][x]",
           kind: @stencil-contract.ContractKind::Array,
           required: true,
         },
@@ -165,7 +165,7 @@ test "schema rejects invalid and duplicate paths" {
   } noraise {
     _ => "no error"
   }
-  assert_eq(invalid, "users[][]")
+  assert_eq(invalid, "users[][x]")
 
   let invalid_separator = try {
     ignore(
@@ -1206,4 +1206,523 @@ test "static diagnostics do not have a sample instance path" {
     }
   }
   assert_true(found_static)
+}
+
+///|
+test "schema paths support consecutive and mixed array dimensions" {
+  let schema = @stencil-contract.ContractSchema::new([
+    {
+      path: "matrix[][]",
+      kind: @stencil-contract.ContractKind::Number,
+      required: true,
+    },
+    {
+      path: "tensor[][][]",
+      kind: @stencil-contract.ContractKind::Bool,
+      required: false,
+    },
+    {
+      path: "groups[].values[][]",
+      kind: @stencil-contract.ContractKind::String,
+      required: false,
+    },
+    {
+      path: "loose[][]",
+      kind: @stencil-contract.ContractKind::Any,
+      required: false,
+    },
+  ])
+  let report = @stencil-contract.check_contract(
+    "{{matrix}} {{tensor}} {{groups}} {{loose}}",
+    schema,
+    {
+      "matrix": [[1, 2], [3]],
+      "tensor": [[[true, false]]],
+      "groups": [{ "values": [["a"], ["b", "c"]] }],
+      "loose": [[{ "undeclared": true }]],
+    },
+  )
+  assert_true(report.is_valid())
+}
+
+///|
+test "schema validates every inferred nested array parent kind" {
+  let outer_conflict = try {
+    ignore(
+      @stencil-contract.ContractSchema::new([
+        {
+          path: "matrix",
+          kind: @stencil-contract.ContractKind::String,
+          required: true,
+        },
+        {
+          path: "matrix[][]",
+          kind: @stencil-contract.ContractKind::Number,
+          required: false,
+        },
+      ]),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidParentKind(path, _, _) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(outer_conflict, "matrix")
+
+  let inner_conflict = try {
+    ignore(
+      @stencil-contract.ContractSchema::new([
+        {
+          path: "matrix[]",
+          kind: @stencil-contract.ContractKind::String,
+          required: true,
+        },
+        {
+          path: "matrix[][]",
+          kind: @stencil-contract.ContractKind::Number,
+          required: false,
+        },
+      ]),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidParentKind(path, _, _) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(inner_conflict, "matrix[]")
+
+  let object_conflict = try {
+    ignore(
+      @stencil-contract.ContractSchema::new([
+        {
+          path: "matrix",
+          kind: @stencil-contract.ContractKind::Array,
+          required: true,
+        },
+        {
+          path: "matrix[]",
+          kind: @stencil-contract.ContractKind::Array,
+          required: false,
+        },
+        {
+          path: "matrix[][]",
+          kind: @stencil-contract.ContractKind::String,
+          required: false,
+        },
+        {
+          path: "matrix[][].name",
+          kind: @stencil-contract.ContractKind::String,
+          required: true,
+        },
+      ]),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidParentKind(path, _, _) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(object_conflict, "matrix[][]")
+}
+
+///|
+test "nested array diagnostics preserve wildcard and concrete paths" {
+  let schema = @stencil-contract.ContractSchema::new([
+    {
+      path: "matrix",
+      kind: @stencil-contract.ContractKind::Array,
+      required: true,
+    },
+    {
+      path: "matrix[]",
+      kind: @stencil-contract.ContractKind::Array,
+      required: false,
+    },
+    {
+      path: "matrix[][]",
+      kind: @stencil-contract.ContractKind::Object,
+      required: false,
+    },
+    {
+      path: "matrix[][].name",
+      kind: @stencil-contract.ContractKind::String,
+      required: true,
+    },
+  ])
+  let report = @stencil-contract.check_contract_samples(
+    "{{matrix}}",
+    Map([]),
+    schema,
+    [
+      {
+        "matrix": [[{ "name": "Ada", "extra~/x": true }, {}], [{ "name": 42 }]],
+      },
+      { "matrix": [[]] },
+    ],
+    @stencil-contract.ContractPathMode::RootPaths,
+  )
+  assert_false(report.is_valid())
+  let mut found_missing = false
+  let mut found_type = false
+  let mut found_extra = false
+  for diagnostic in report.diagnostics {
+    match (diagnostic.code, diagnostic.path, diagnostic.instance_path) {
+      (
+        @stencil-contract.ContractDiagnosticCode::MissingRequiredField,
+        "matrix[][].name",
+        Some("/matrix/0/1/name"),
+      ) if diagnostic.source == "sample[0]" => found_missing = true
+      (
+        @stencil-contract.ContractDiagnosticCode::TypeMismatch,
+        "matrix[][].name",
+        Some("/matrix/1/0/name"),
+      ) if diagnostic.source == "sample[0]" => found_type = true
+      (
+        @stencil-contract.ContractDiagnosticCode::UnexpectedField,
+        "matrix[][].extra~/x",
+        Some("/matrix/0/0/extra~0~1x"),
+      ) if diagnostic.source == "sample[0]" => found_extra = true
+      _ => ()
+    }
+  }
+  assert_true(found_missing)
+  assert_true(found_type)
+  assert_true(found_extra)
+  assert_eq(
+    count_issue_from(
+      report,
+      @stencil-contract.ContractDiagnosticCode::MissingRequiredField,
+      "sample[1]",
+      "matrix[][].name",
+    ),
+    0,
+  )
+}
+
+///|
+test "context-aware sections enter consecutive array dimensions" {
+  let schema = @stencil-contract.ContractSchema::new([
+    {
+      path: "matrix",
+      kind: @stencil-contract.ContractKind::Array,
+      required: true,
+    },
+    {
+      path: "matrix[]",
+      kind: @stencil-contract.ContractKind::Array,
+      required: false,
+    },
+    {
+      path: "matrix[][]",
+      kind: @stencil-contract.ContractKind::Object,
+      required: false,
+    },
+    {
+      path: "matrix[][].name",
+      kind: @stencil-contract.ContractKind::String,
+      required: true,
+    },
+  ])
+  let report = @stencil-contract.check_contract_with_context(
+    "{{#matrix}}{{#.}}{{name}}{{/.}}{{/matrix}}",
+    schema,
+    { "matrix": [[{ "name": "Ada" }]] },
+  )
+  assert_true(report.is_valid())
+  assert_eq(
+    count_issue_from(
+      report,
+      @stencil-contract.ContractDiagnosticCode::UndeclaredTemplatePath,
+      "template",
+      "name",
+    ),
+    0,
+  )
+
+  let partial_report = @stencil-contract.check_contract_samples(
+    "{{#matrix}}{{#.}}{{>entry}}{{/.}}{{/matrix}}",
+    Map([("entry", "{{name}}")]),
+    schema,
+    [{ "matrix": [[{ "name": "Ada" }]] }, { "matrix": [[{ "name": "Lin" }]] }],
+    @stencil-contract.ContractPathMode::ContextAware,
+  )
+  assert_true(partial_report.is_valid())
+  assert_eq(
+    count_issue_from(
+      partial_report,
+      @stencil-contract.ContractDiagnosticCode::UndeclaredTemplatePath,
+      "entry",
+      "name",
+    ),
+    0,
+  )
+}
+
+///|
+test "JSON Schema import preserves nested constraints and strict extras" {
+  let schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["matrix"],
+    "properties": {
+      "matrix": {
+        "type": "array",
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string" },
+              "age": { "type": "integer" },
+            },
+          },
+        },
+      },
+    },
+  })
+  let report = @stencil-contract.check_contract("{{matrix}}", schema, {
+    "matrix": [[{ "name": "Ada", "age": 7, "extra": true }, {}]],
+    "rootExtra": 1,
+  })
+  assert_false(report.is_valid())
+  let mut found_missing = false
+  let mut found_nested_extra = false
+  let mut found_root_extra = false
+  for diagnostic in report.diagnostics {
+    match (diagnostic.code, diagnostic.path, diagnostic.instance_path) {
+      (
+        @stencil-contract.ContractDiagnosticCode::MissingRequiredField,
+        "matrix[][].name",
+        Some("/matrix/0/1/name"),
+      ) => found_missing = true
+      (
+        @stencil-contract.ContractDiagnosticCode::UnexpectedField,
+        "matrix[][].extra",
+        Some("/matrix/0/0/extra"),
+      ) => found_nested_extra = true
+      (
+        @stencil-contract.ContractDiagnosticCode::UnexpectedField,
+        "rootExtra",
+        Some("/rootExtra"),
+      ) => found_root_extra = true
+      _ => ()
+    }
+  }
+  assert_true(found_missing)
+  assert_true(found_nested_extra)
+  assert_true(found_root_extra)
+}
+
+///|
+test "JSON Schema import keeps additionalProperties true at each object" {
+  let unconstrained_schema = @stencil-contract.ContractSchema::from_json_schema({},
+  )
+  let unconstrained_report = @stencil-contract.check_contract(
+    "",
+    unconstrained_schema,
+    { "anything": true },
+  )
+  assert_true(unconstrained_report.is_valid())
+
+  let open_schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "properties": {
+      "profile": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } },
+      },
+    },
+  })
+  let open_report = @stencil-contract.check_contract(
+    "{{profile.name}}",
+    open_schema,
+    { "rootExtra": true, "profile": { "name": "Ada", "nestedExtra": 1 } },
+  )
+  assert_true(open_report.is_valid())
+
+  let mixed_policy_schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "profile": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "name": { "type": "string" } },
+      },
+    },
+  })
+  let mixed_report = @stencil-contract.check_contract(
+    "{{profile.name}}",
+    mixed_policy_schema,
+    { "rootExtra": true, "profile": { "name": "Ada", "nestedExtra": 1 } },
+  )
+  assert_true(
+    has_issue(
+      mixed_report,
+      @stencil-contract.ContractDiagnosticCode::UnexpectedField,
+      "profile.nestedExtra",
+    ),
+  )
+  assert_false(
+    has_issue(
+      mixed_report,
+      @stencil-contract.ContractDiagnosticCode::UnexpectedField,
+      "rootExtra",
+    ),
+  )
+}
+
+///|
+test "JSON Schema import reports invalid and unsupported definitions" {
+  let invalid_root = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({ "type": "string" }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidJsonSchema(path) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(invalid_root, "$")
+
+  let unsupported_keyword = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "properties": { "count": { "type": "number", "minimum": 0 } },
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::UnsupportedJsonSchemaFeature(path, keyword) =>
+      path + ":" + keyword
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(unsupported_keyword, "count:minimum")
+
+  let unsupported_union = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "properties": { "value": { "type": ["string", "null"] } },
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::UnsupportedJsonSchemaFeature(path, keyword) =>
+      path + ":" + keyword
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(unsupported_union, "value:type union")
+
+  let schema_additional_properties = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+          },
+        },
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::UnsupportedJsonSchemaFeature(path, keyword) =>
+      path + ":" + keyword
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(schema_additional_properties, "data:additionalProperties")
+
+  let required_unconstrained = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unknown"],
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::UnsupportedJsonSchemaFeature(path, feature) =>
+      path + ":" + feature
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(
+    required_unconstrained, "$:required property without a declared property schema",
+  )
+}
+
+///|
+test "contract reports serialize stable JSON diagnostics" {
+  let report = @stencil-contract.check_contract(
+    "{{count}}",
+    @stencil-contract.ContractSchema::new([
+      {
+        path: "count",
+        kind: @stencil-contract.ContractKind::Number,
+        required: true,
+      },
+    ]),
+    { "count": "many" },
+  )
+  let serialized = report.to_json().stringify()
+  assert_eq(
+    serialized, "{\"valid\":false,\"diagnostics\":[{\"severity\":\"error\",\"code\":\"type_mismatch\",\"source\":\"sample\",\"path\":\"count\",\"instance_path\":\"/count\",\"expected\":\"Number\",\"actual\":\"String\",\"message\":\"expected Number, got String at count\"}]}",
+  )
+  assert_eq(serialized, report.to_json().stringify())
+
+  let static_report = @stencil-contract.check_contract(
+    "{{missing}}",
+    @stencil-contract.ContractSchema::new([]),
+    {},
+  )
+  match static_report.to_json() {
+    Object(report_object) =>
+      match report_object.get("diagnostics") {
+        Some(Array([Object(first), ..])) =>
+          assert_eq(first.get("instance_path"), Some(Json::null()))
+        _ => fail("serialized diagnostics are missing")
+      }
+    _ => fail("serialized report is not an object")
+  }
+
+  let warning_report = @stencil-contract.check_contract(
+    "{{name}}",
+    @stencil-contract.ContractSchema::new([
+      {
+        path: "name",
+        kind: @stencil-contract.ContractKind::String,
+        required: true,
+      },
+      {
+        path: "unused",
+        kind: @stencil-contract.ContractKind::Bool,
+        required: false,
+      },
+    ]),
+    { "name": "Ada" },
+  )
+  assert_eq(
+    warning_report.to_json().stringify(),
+    "{\"valid\":true,\"diagnostics\":[{\"severity\":\"warning\",\"code\":\"unused_schema_field\",\"source\":\"schema\",\"path\":\"unused\",\"instance_path\":null,\"expected\":\"template reference\",\"actual\":\"\",\"message\":\"schema field is not referenced by the template: unused\"}]}",
+  )
 }

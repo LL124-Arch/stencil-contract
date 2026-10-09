@@ -19,9 +19,10 @@ pub(all) enum ContractPathMode {
 }
 
 ///|
-/// A schema field. Paths use dots for object fields and `[]` for array items.
+/// A schema field. Paths use dots for object fields and repeat `[]` for each
+/// nested array level. `kind` describes the value at the end of the full path.
 /// `required` on an array-item path requires its containing array property, but
-/// does not require the array to contain any items.
+/// does not require any array level to contain items.
 pub(all) struct ContractField {
   path : String
   kind : ContractKind
@@ -29,11 +30,13 @@ pub(all) struct ContractField {
 }
 
 ///|
-/// An invalid contract schema.
+/// An invalid contract schema or unsupported JSON Schema definition.
 pub(all) suberror ContractError {
   InvalidFieldPath(String)
   DuplicateFieldPath(String)
   InvalidParentKind(String, ContractKind, ContractKind)
+  InvalidJsonSchema(String)
+  UnsupportedJsonSchemaFeature(String, String)
 }
 
 ///|
@@ -83,13 +86,14 @@ pub(all) struct ContractReport {
 /// A validated set of flat field declarations.
 pub struct ContractSchema {
   fields : Array[ContractField]
+  open_object_paths : Array[String]
 }
 
 ///|
 /// Internal parsed path component.
 priv struct ContractPathPart {
   key : String
-  array_item : Bool
+  array_depth : Int
 }
 
 ///|
@@ -106,6 +110,14 @@ priv struct TemplateReference {
 /// structure (`Object` for dotted children and `Array` before `[]`).
 pub fn ContractSchema::new(
   fields : Array[ContractField],
+) -> ContractSchema raise ContractError {
+  contract_schema_new(fields, [])
+}
+
+///|
+fn contract_schema_new(
+  fields : Array[ContractField],
+  open_object_paths : Array[String],
 ) -> ContractSchema raise ContractError {
   let copied : Array[ContractField] = []
   let by_path : Map[String, ContractField] = Map([])
@@ -129,7 +141,12 @@ pub fn ContractSchema::new(
       }
     }
   }
-  { fields: copied, }
+  for path in open_object_paths {
+    if path != "" && parse_contract_path(path) is None {
+      raise InvalidFieldPath(path)
+    }
+  }
+  { fields: copied, open_object_paths, }
 }
 
 ///|
@@ -161,20 +178,25 @@ fn parse_contract_path(path : String) -> Array[ContractPathPart]? {
 
 ///|
 fn parse_contract_path_part(raw : String) -> ContractPathPart? {
-  let raw_view = raw.view()
-  let array_item = raw_view.has_suffix("[]".view())
-  let key_view = if array_item {
-    raw_view.strip_suffix("[]".view()).unwrap()
-  } else {
-    raw_view
-  }
+  let (key_view, array_depth) = contract_strip_array_suffixes(raw.view(), 0)
   let key = key_view.to_owned()
   if key.length() == 0 ||
     key_view.contains_char('[') ||
     key_view.contains_char(']') {
     None
   } else {
-    Some({ key, array_item, })
+    Some({ key, array_depth, })
+  }
+}
+
+///|
+fn contract_strip_array_suffixes(
+  path : StringView,
+  depth : Int,
+) -> (StringView, Int) {
+  match path.strip_suffix("[]".view()) {
+    Some(prefix) => contract_strip_array_suffixes(prefix, depth + 1)
+    None => (path, depth)
   }
 }
 
@@ -187,17 +209,13 @@ fn contract_parent_requirements(
   for i = 0; i < parts.length(); i = i + 1 {
     let part = parts[i]
     let base = contract_join_path(current, part.key)
-    if part.array_item {
-      result.push((base, ContractKind::Array))
-      current = base + "[]"
-      if i < parts.length() - 1 {
-        result.push((current, ContractKind::Object))
-      }
-    } else {
-      current = base
-      if i < parts.length() - 1 {
-        result.push((current, ContractKind::Object))
-      }
+    current = base
+    for _ in 0..<part.array_depth {
+      result.push((current, ContractKind::Array))
+      current = current + "[]"
+    }
+    if i < parts.length() - 1 {
+      result.push((current, ContractKind::Object))
     }
   }
   result

@@ -17,6 +17,8 @@ pub(all) suberror ContractError {
   InvalidFieldPath(String)
   DuplicateFieldPath(String)
   InvalidParentKind(String, ContractKind, ContractKind)
+  InvalidJsonSchema(String)
+  UnsupportedJsonSchemaFeature(String, String)
 }
 
 // Types and methods
@@ -68,10 +70,13 @@ pub(all) struct ContractReport {
   diagnostics : Array[ContractDiagnostic]
 }
 pub fn ContractReport::is_valid(Self) -> Bool
+pub fn ContractReport::to_json(Self) -> Json
 
 pub struct ContractSchema {
   fields : Array[ContractField]
+  open_object_paths : Array[String]
 }
+pub fn ContractSchema::from_json_schema(Json) -> Self raise ContractError
 pub fn ContractSchema::new(Array[ContractField]) -> Self raise ContractError
 
 pub(all) enum ContractSeverity {

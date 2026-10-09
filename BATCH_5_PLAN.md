@@ -1,6 +1,6 @@
-# 下一批次开发计划：连续嵌套数组路径
+# 批次计划与完成记录：连续嵌套数组路径
 
-> 状态：待执行。已完成批次记录依次保存在 `BATCH_3_PLAN.md` 和 `BATCH_4_PLAN.md`。
+> 状态：已完成（2026-10-09）。此前批次记录保存在 `BATCH_3_PLAN.md` 和 `BATCH_4_PLAN.md`。
 
 ## 背景
 
@@ -44,3 +44,12 @@
 - 多维数组维度或元素数量约束。
 - 对 `{{.}}` 或其它 Stencil 语法新增 schema 字段映射规则。
 - JSON Schema 导入、CLI 或运行时模板渲染。
+
+## 完成记录
+
+- 路径段现在记录连续 `[]` 深度，支持 `matrix[][]`、`tensor[][][]` 和 `groups[].values[][]`；非法括号仍返回 `InvalidFieldPath`。
+- 每一层显式父级都按路径结构验证为 Array；数组后带点分字段时，数组元素层验证为 Object。
+- 样例校验递归所有维度，保留通配 schema 路径，并为缺失、类型错误和额外字段生成完整 JSON Pointer；空数组不要求有元素。
+- ContextAware section 可通过 `{{#.}}` 进入下一层嵌套数组；partial 与批量 API 也有对应回归覆盖，嵌套 `Any` 仍允许任意子内容。
+- README 已补充连续数组路径与实例路径说明；公开 API 未变化。
+- 验证通过：`moon fmt --check`、`moon check --deny-warn --target all`、`moon build`、`moon test --deny-warn --target all`（wasm、wasm-gc、js、native 各 26/26）和 `moon info --target all`。

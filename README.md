@@ -6,7 +6,7 @@ Rendering is provided by `LL124-Arch/stencil`.
 
 ## Define a contract
 
-Schema paths use dots for object fields and `[]` for array elements. Declare nested parents when you need to constrain their type or requiredness. Any undeclared sample fields are errors, including keys inside array objects. Use an `Any` declaration for an arbitrary value and its contents.
+Schema paths use dots for object fields and repeat `[]` for each array level. For example, `matrix[][]` validates every value inside each inner array, while `matrix[][].name` validates a property on each object at that level. Declared parents must match the path structure (`Array` for each array level and `Object` before a nested field). `required` checks for a containing property and never requires arrays to be non-empty. Any undeclared sample fields are errors, including keys inside nested arrays. Use an `Any` declaration for an arbitrary value and its contents.
 
 ```moonbit
 import {
@@ -57,6 +57,27 @@ let partial_report = @contract.check_contract_with_partials(
 )
 ```
 
+Import a supported JSON Schema directly with `ContractSchema::from_json_schema`.
+The importer flattens `properties`, `required`, primitive `type`, nested array
+`items`, and boolean `additionalProperties` into the contract paths above.
+JSON Schema's default `additionalProperties: true` is preserved per object;
+`false` rejects undeclared keys. `integer` maps to `Number`. Unsupported
+constraints such as `$ref`, `minimum`, `pattern`, and `enum` return a
+`ContractError` so their meaning is not silently lost. The root remains subject
+to this checker's Object requirement.
+
+```moonbit
+let imported_schema = @contract.ContractSchema::from_json_schema({
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": { "type": "integer" },
+    "labels": { "type": "array", "items": { "type": "string" } },
+  },
+})
+```
+
 For Mustache-style lookups inside sections, use `check_contract_with_context`. It resolves object fields from the innermost section scope outward, including array item paths such as `users[].name`. Inverted sections keep the surrounding scope. Use `check_contract_with_partials_and_context` when partials are present; each partial is analyzed in the context of its call site, including when the same partial is called from multiple sections.
 
 ```moonbit
@@ -95,7 +116,20 @@ member should be, while unexpected fields point to the extra member. The root
 location is `Some("")`; template, partial, and schema diagnostics use `None`.
 Pointer keys escape `~` as `~0` and `/` as `~1`.
 
+For consecutive nested arrays, schema paths retain each wildcard while
+`instance_path` records every concrete array index. For example,
+`matrix[][].name` can report `instance_path = Some("/matrix/1/0/name")`.
+
 Diagnostics have a stable order: template and partial issues first, schema warnings next, then sample issues in input order, schema path, and concrete instance path order. `ContractDiagnosticCode` distinguishes syntax errors, partial errors, undeclared template paths, sample validation errors, unused schema fields, and an empty sample list. `ContractReport::is_valid()` is false when any error is present; unused schema fields are warnings.
+
+Export a report for CI logs or another tool with `ContractReport::to_json()`.
+The JSON contains a `valid` flag and ordered diagnostics with stable snake-case
+severity and code names. `instance_path` is a JSON `null` when a diagnostic
+does not refer to a sample value.
+
+```moonbit
+println(report.to_json().stringify())
+```
 
 ```sh
 moon check

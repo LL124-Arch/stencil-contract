@@ -483,6 +483,12 @@ fn contract_resolve_reference(
   path : String,
 ) -> Array[String] {
   let matches : Array[String] = []
+  if path == "." {
+    for scope in scopes {
+      matches.push(scope)
+    }
+    return matches
+  }
   for scope in scopes {
     let candidate = contract_join_path(scope, path)
     if contract_schema_has_field(schema, candidate) &&
@@ -555,14 +561,16 @@ fn contract_section_child_scopes(
               [item_path]
             Some(item) if contract_kinds_equal(item.kind, ContractKind::Any) =>
               [item_path]
+            Some(item) if contract_kinds_equal(item.kind, ContractKind::Array) =>
+              [item_path]
             Some(_) =>
-              if contract_schema_has_dotted_child(schema, item_path) {
+              if contract_schema_has_path_or_descendant(schema, item_path) {
                 [item_path]
               } else {
                 []
               }
             None =>
-              if contract_schema_has_dotted_child(schema, item_path) {
+              if contract_schema_has_path_or_descendant(schema, item_path) {
                 [item_path]
               } else {
                 []
@@ -575,7 +583,7 @@ fn contract_section_child_scopes(
     None => {
       let result : Array[String] = []
       let item_path = path + "[]"
-      if contract_schema_has_dotted_child(schema, item_path) {
+      if contract_schema_has_path_or_descendant(schema, item_path) {
         result.push(item_path)
       }
       if contract_schema_has_dotted_child(schema, path) {
@@ -711,31 +719,8 @@ fn contract_validate_field(
         None => {
           let is_leaf = index == parts.length() - 1
           let parent_field = contract_schema_get_field(schema, key_path)
-          if is_leaf && !part.array_item && field.required {
-            contract_add_diagnostic_at(
-              diagnostics,
-              ContractSeverity::Error,
-              ContractDiagnosticCode::MissingRequiredField,
-              source,
-              field.path,
-              Some(key_instance_path),
-              "present",
-              "missing",
-              "required sample path is missing: \{field.path}",
-            )
-          } else if part.array_item && parent_field is None && field.required {
-            contract_add_diagnostic_at(
-              diagnostics,
-              ContractSeverity::Error,
-              ContractDiagnosticCode::MissingRequiredField,
-              source,
-              field.path,
-              Some(key_instance_path),
-              "present",
-              "missing",
-              "required sample path is missing: \{field.path}",
-            )
-          } else if !is_leaf && parent_field is None && field.required {
+          if field.required &&
+            ((part.array_depth == 0 && is_leaf) || parent_field is None) {
             contract_add_diagnostic_at(
               diagnostics,
               ContractSeverity::Error,
@@ -750,105 +735,18 @@ fn contract_validate_field(
           }
         }
         Some(value) =>
-          if part.array_item {
-            match value {
-              Array(items) => {
-                let item_path = key_path + "[]"
-                if index == parts.length() - 1 {
-                  for item_index, item in items {
-                    if !contract_kind_matches(field.kind, item) {
-                      contract_add_diagnostic_at(
-                        diagnostics,
-                        ContractSeverity::Error,
-                        ContractDiagnosticCode::TypeMismatch,
-                        source,
-                        item_path,
-                        Some(
-                          contract_json_pointer_index(
-                            key_instance_path, item_index,
-                          ),
-                        ),
-                        contract_kind_name(field.kind),
-                        contract_json_kind_name(item),
-                        "expected \{contract_kind_name(field.kind)}, got \{contract_json_kind_name(item)} at \{item_path}",
-                      )
-                    }
-                  }
-                } else {
-                  for item_index, item in items {
-                    contract_validate_field(
-                      item,
-                      parts,
-                      index + 1,
-                      item_path,
-                      contract_json_pointer_index(key_instance_path, item_index),
-                      field,
-                      schema,
-                      source,
-                      diagnostics,
-                    )
-                  }
-                }
-              }
-              _ =>
-                if contract_schema_get_field(schema, key_path) is None {
-                  contract_add_diagnostic_at(
-                    diagnostics,
-                    ContractSeverity::Error,
-                    ContractDiagnosticCode::TypeMismatch,
-                    source,
-                    key_path,
-                    Some(key_instance_path),
-                    "Array",
-                    contract_json_kind_name(value),
-                    "expected Array, got \{contract_json_kind_name(value)} at \{key_path}",
-                  )
-                }
-            }
-          } else if index == parts.length() - 1 {
-            if !contract_kind_matches(field.kind, value) {
-              contract_add_diagnostic_at(
-                diagnostics,
-                ContractSeverity::Error,
-                ContractDiagnosticCode::TypeMismatch,
-                source,
-                key_path,
-                Some(key_instance_path),
-                contract_kind_name(field.kind),
-                contract_json_kind_name(value),
-                "expected \{contract_kind_name(field.kind)}, got \{contract_json_kind_name(value)} at \{key_path}",
-              )
-            }
-          } else {
-            match value {
-              Object(_) =>
-                contract_validate_field(
-                  value,
-                  parts,
-                  index + 1,
-                  key_path,
-                  key_instance_path,
-                  field,
-                  schema,
-                  source,
-                  diagnostics,
-                )
-              _ =>
-                if contract_schema_get_field(schema, key_path) is None {
-                  contract_add_diagnostic_at(
-                    diagnostics,
-                    ContractSeverity::Error,
-                    ContractDiagnosticCode::TypeMismatch,
-                    source,
-                    key_path,
-                    Some(key_instance_path),
-                    "Object",
-                    contract_json_kind_name(value),
-                    "expected Object, got \{contract_json_kind_name(value)} at \{key_path}",
-                  )
-                }
-            }
-          }
+          contract_validate_path_value(
+            value,
+            parts,
+            index,
+            part.array_depth,
+            key_path,
+            key_instance_path,
+            field,
+            schema,
+            source,
+            diagnostics,
+          )
       }
     }
     _ =>
@@ -865,6 +763,99 @@ fn contract_validate_field(
           "expected Object, got \{contract_json_kind_name(current)} at \{schema_prefix}",
         )
       }
+  }
+}
+
+///|
+fn contract_validate_path_value(
+  value : Json,
+  parts : Array[ContractPathPart],
+  index : Int,
+  array_depth : Int,
+  schema_path : String,
+  instance_path : String,
+  field : ContractField,
+  schema : ContractSchema,
+  source : String,
+  diagnostics : Array[ContractDiagnostic],
+) -> Unit {
+  if array_depth > 0 {
+    match value {
+      Array(items) => {
+        let item_schema_path = schema_path + "[]"
+        for item_index, item in items {
+          contract_validate_path_value(
+            item,
+            parts,
+            index,
+            array_depth - 1,
+            item_schema_path,
+            contract_json_pointer_index(instance_path, item_index),
+            field,
+            schema,
+            source,
+            diagnostics,
+          )
+        }
+      }
+      _ =>
+        if contract_schema_get_field(schema, schema_path) is None {
+          contract_add_diagnostic_at(
+            diagnostics,
+            ContractSeverity::Error,
+            ContractDiagnosticCode::TypeMismatch,
+            source,
+            schema_path,
+            Some(instance_path),
+            "Array",
+            contract_json_kind_name(value),
+            "expected Array, got \{contract_json_kind_name(value)} at \{schema_path}",
+          )
+        }
+    }
+  } else if index == parts.length() - 1 {
+    if !contract_kind_matches(field.kind, value) {
+      contract_add_diagnostic_at(
+        diagnostics,
+        ContractSeverity::Error,
+        ContractDiagnosticCode::TypeMismatch,
+        source,
+        schema_path,
+        Some(instance_path),
+        contract_kind_name(field.kind),
+        contract_json_kind_name(value),
+        "expected \{contract_kind_name(field.kind)}, got \{contract_json_kind_name(value)} at \{schema_path}",
+      )
+    }
+  } else {
+    match value {
+      Object(_) =>
+        contract_validate_field(
+          value,
+          parts,
+          index + 1,
+          schema_path,
+          instance_path,
+          field,
+          schema,
+          source,
+          diagnostics,
+        )
+      _ =>
+        if contract_schema_get_field(schema, schema_path) is None {
+          contract_add_diagnostic_at(
+            diagnostics,
+            ContractSeverity::Error,
+            ContractDiagnosticCode::TypeMismatch,
+            source,
+            schema_path,
+            Some(instance_path),
+            "Object",
+            contract_json_kind_name(value),
+            "expected Object, got \{contract_json_kind_name(value)} at \{schema_path}",
+          )
+        }
+    }
   }
 }
 
@@ -893,6 +884,8 @@ fn contract_validate_extra_fields(
                 child, child_path, child_instance_path, schema, source, diagnostics,
               )
           }
+        } else if schema.open_object_paths.contains(schema_prefix) {
+          ()
         } else {
           contract_add_diagnostic_at(
             diagnostics,
