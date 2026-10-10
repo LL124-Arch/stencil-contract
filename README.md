@@ -59,7 +59,8 @@ let partial_report = @contract.check_contract_with_partials(
 
 Import a supported JSON Schema directly with `ContractSchema::from_json_schema`.
 The importer flattens `properties`, `required`, primitive `type`, nested array
-`items`, and boolean `additionalProperties` into the contract paths above.
+`items`, boolean `additionalProperties`, `propertyNames`, and
+`dependentRequired` into the contract checks below.
 JSON Schema's default `additionalProperties: true` is preserved per object;
 `false` rejects undeclared keys. `integer` maps to `Number`. Acyclic local
 JSON Pointer references into `$defs` or `definitions` are expanded at each
@@ -76,8 +77,13 @@ MoonBit core's `Regex` syntax; patterns that the engine cannot compile return
 `ContractError`. Patterns are searched within the string unless anchored with
 `^` or `$`. A failed assertion produces a `constraint_violation` diagnostic
 with the schema path and concrete instance path. Other constraints such as
-`format` and schema-composition keywords return `ContractError` instead of
-being discarded. The root remains subject to this checker's Object requirement.
+`patternProperties`, `format`, and schema-composition keywords return
+`ContractError` instead of being discarded. `propertyNames` supports boolean
+schemas and the string `type`, `enum`, `const`, `pattern`, `minLength`, and
+`maxLength` assertions; a name failure points to that key's JSON Pointer.
+`dependentRequired` reports a missing dependent property only when its trigger
+property is present. The root remains subject to this checker's Object
+requirement.
 
 ```moonbit
 let imported_schema = @contract.ContractSchema::from_json_schema({
@@ -90,6 +96,8 @@ let imported_schema = @contract.ContractSchema::from_json_schema({
     "score": { "type": "number", "minimum": 0, "exclusiveMaximum": 100 },
     "code": { "type": "string", "pattern": "^[A-Z]{2}-[0-9]{4}$" },
     "price": { "type": "number", "multipleOf": 0.05 },
+    "billing_address": { "type": "string" },
+    "billing_city": { "type": "string" },
     "labels": {
       "type": "array",
       "minItems": 1,
@@ -97,6 +105,8 @@ let imported_schema = @contract.ContractSchema::from_json_schema({
       "items": { "type": "string", "minLength": 1 },
     },
   },
+  "propertyNames": { "type": "string", "pattern": "^[a-z_]+$" },
+  "dependentRequired": { "billing_address": ["billing_city"] },
 })
 ```
 

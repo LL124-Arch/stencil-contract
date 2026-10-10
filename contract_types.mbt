@@ -156,7 +156,7 @@ fn contract_schema_new(
   }
   for (path, constraint) in value_constraints {
     match constraint {
-      Object(keywords) =>
+      Object(keywords) => {
         match keywords.get("pattern") {
           Some(String(pattern)) =>
             if contract_compile_json_schema_pattern(pattern) is None {
@@ -166,6 +166,21 @@ fn contract_schema_new(
             }
           _ => ()
         }
+        match keywords.get("propertyNames") {
+          Some(Object(property_keywords)) =>
+            match property_keywords.get("pattern") {
+              Some(String(pattern)) =>
+                if contract_compile_json_schema_pattern(pattern) is None {
+                  raise InvalidJsonSchema(
+                    contract_json_schema_path_label(path) +
+                    ".propertyNames.pattern",
+                  )
+                }
+              _ => ()
+            }
+          _ => ()
+        }
+      }
       _ => ()
     }
   }

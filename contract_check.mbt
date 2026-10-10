@@ -670,7 +670,7 @@ fn contract_schema_get_field(
 ///|
 fn contract_validate_sample(
   schema : ContractSchema,
-  pattern_constraints : Array[(String, String, @string.Regex)],
+  pattern_constraints : Array[(String, String, Bool, @string.Regex)],
   sample : Json,
   source : String,
   diagnostics : Array[ContractDiagnostic],
@@ -714,7 +714,7 @@ fn contract_validate_field(
   instance_path : String,
   field : ContractField,
   schema : ContractSchema,
-  pattern_constraints : Array[(String, String, @string.Regex)],
+  pattern_constraints : Array[(String, String, Bool, @string.Regex)],
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
@@ -791,7 +791,7 @@ fn contract_validate_path_value(
   instance_path : String,
   field : ContractField,
   schema : ContractSchema,
-  pattern_constraints : Array[(String, String, @string.Regex)],
+  pattern_constraints : Array[(String, String, Bool, @string.Regex)],
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
@@ -883,7 +883,7 @@ fn contract_validate_path_value(
 ///|
 fn contract_validate_value_constraints(
   schema : ContractSchema,
-  pattern_constraints : Array[(String, String, @string.Regex)],
+  pattern_constraints : Array[(String, String, Bool, @string.Regex)],
   schema_path : String,
   value : Json,
   instance_path : String,
@@ -897,7 +897,9 @@ fn contract_validate_value_constraints(
           match
             (
               value,
-              contract_find_schema_pattern(pattern_constraints, schema_path),
+              contract_find_schema_pattern(
+                pattern_constraints, schema_path, false,
+              ),
             ) {
             (String(text), Some((pattern, regex))) if regex.execute(text)
               is None =>
@@ -1131,6 +1133,52 @@ fn contract_validate_value_constraints(
               }
             _ => ()
           }
+          match (value, keywords.get("dependentRequired")) {
+            (Object(properties), Some(Object(dependencies))) =>
+              for (trigger, required_names) in dependencies {
+                if properties.contains(trigger) {
+                  match required_names {
+                    Array(names) =>
+                      for required_name in names {
+                        match required_name {
+                          String(name) if !properties.contains(name) => {
+                            let required_path = contract_join_path(
+                              schema_path, name,
+                            )
+                            let required_instance_path = contract_json_pointer_member(
+                              instance_path, name,
+                            )
+                            contract_add_diagnostic_at(
+                              diagnostics,
+                              ContractSeverity::Error,
+                              ContractDiagnosticCode::MissingRequiredField,
+                              source,
+                              required_path,
+                              Some(required_instance_path),
+                              "present when \{trigger} is present",
+                              "missing",
+                              "property \{name} is required when \{trigger} is present",
+                            )
+                          }
+                          _ => ()
+                        }
+                      }
+                    _ => ()
+                  }
+                }
+              }
+            _ => ()
+          }
+          match (value, keywords.get("propertyNames")) {
+            (Object(properties), Some(property_names_schema)) =>
+              for (name, _) in properties {
+                contract_validate_property_name(
+                  property_names_schema, name, schema_path, instance_path, pattern_constraints,
+                  source, diagnostics,
+                )
+              }
+            _ => ()
+          }
         }
         _ => ()
       }
@@ -1141,22 +1189,40 @@ fn contract_validate_value_constraints(
 ///|
 fn contract_compile_schema_patterns(
   schema : ContractSchema,
-) -> Array[(String, String, @string.Regex)] {
-  let result : Array[(String, String, @string.Regex)] = []
+) -> Array[(String, String, Bool, @string.Regex)] {
+  let result : Array[(String, String, Bool, @string.Regex)] = []
   for (path, constraint) in schema.value_constraints {
     match constraint {
-      Object(keywords) =>
+      Object(keywords) => {
         match keywords.get("pattern") {
           Some(String(pattern)) =>
             result.push(
               (
                 path,
                 pattern,
+                false,
                 contract_compile_json_schema_pattern(pattern).unwrap(),
               ),
             )
           _ => ()
         }
+        match keywords.get("propertyNames") {
+          Some(Object(property_keywords)) =>
+            match property_keywords.get("pattern") {
+              Some(String(pattern)) =>
+                result.push(
+                  (
+                    path,
+                    pattern,
+                    true,
+                    contract_compile_json_schema_pattern(pattern).unwrap(),
+                  ),
+                )
+              _ => ()
+            }
+          _ => ()
+        }
+      }
       _ => ()
     }
   }
@@ -1164,12 +1230,134 @@ fn contract_compile_schema_patterns(
 }
 
 ///|
+fn contract_validate_property_name(
+  property_names_schema : Json,
+  name : String,
+  object_schema_path : String,
+  object_instance_path : String,
+  pattern_constraints : Array[(String, String, Bool, @string.Regex)],
+  source : String,
+  diagnostics : Array[ContractDiagnostic],
+) -> Unit {
+  let schema_path = contract_json_schema_path_label(object_schema_path) +
+    ".propertyNames"
+  let instance_path = contract_json_pointer_member(object_instance_path, name)
+  let value = Json::string(name)
+  match property_names_schema {
+    True => ()
+    False =>
+      contract_add_constraint_violation(
+        source,
+        schema_path,
+        instance_path,
+        "property name accepted by schema",
+        value.stringify(),
+        "property name is rejected by propertyNames",
+        diagnostics,
+      )
+    Object(keywords) => {
+      match keywords.get("type") {
+        Some(String("string")) | None => ()
+        Some(String(expected_type)) =>
+          contract_add_constraint_violation(
+            source, schema_path, instance_path, expected_type, "String", "property name does not match propertyNames type",
+            diagnostics,
+          )
+        _ => ()
+      }
+      match keywords.get("enum") {
+        Some(Array(values)) => {
+          let mut matches = false
+          for allowed in values {
+            if Json::equal(value, allowed) {
+              matches = true
+            }
+          }
+          if !matches {
+            contract_add_constraint_violation(
+              source,
+              schema_path,
+              instance_path,
+              "one of " + Json::array(values).stringify(),
+              value.stringify(),
+              "property name is not in the allowed enum",
+              diagnostics,
+            )
+          }
+        }
+        _ => ()
+      }
+      match keywords.get("const") {
+        Some(expected) if !Json::equal(value, expected) =>
+          contract_add_constraint_violation(
+            source,
+            schema_path,
+            instance_path,
+            "equal to " + expected.stringify(),
+            value.stringify(),
+            "property name does not match const",
+            diagnostics,
+          )
+        _ => ()
+      }
+      match
+        (
+          keywords.get("pattern"),
+          contract_find_schema_pattern(
+            pattern_constraints, object_schema_path, true,
+          ),
+        ) {
+        (Some(String(pattern)), Some((_, regex))) if regex.execute(name) is None =>
+          contract_add_constraint_violation(
+            source,
+            schema_path,
+            instance_path,
+            "match pattern " + pattern,
+            value.stringify(),
+            "property name does not match pattern",
+            diagnostics,
+          )
+        _ => ()
+      }
+      match keywords.get("minLength") {
+        Some(Number(minimum, ..)) if name.char_length().to_double() < minimum =>
+          contract_add_constraint_violation(
+            source,
+            schema_path,
+            instance_path,
+            "at least \{minimum.to_string()} characters",
+            "\{name.char_length()} characters",
+            "property name is shorter than minLength",
+            diagnostics,
+          )
+        _ => ()
+      }
+      match keywords.get("maxLength") {
+        Some(Number(maximum, ..)) if name.char_length().to_double() > maximum =>
+          contract_add_constraint_violation(
+            source,
+            schema_path,
+            instance_path,
+            "at most \{maximum.to_string()} characters",
+            "\{name.char_length()} characters",
+            "property name is longer than maxLength",
+            diagnostics,
+          )
+        _ => ()
+      }
+    }
+    _ => ()
+  }
+}
+
+///|
 fn contract_find_schema_pattern(
-  patterns : Array[(String, String, @string.Regex)],
+  patterns : Array[(String, String, Bool, @string.Regex)],
   schema_path : String,
+  property_name : Bool,
 ) -> (String, @string.Regex)? {
-  for (path, pattern, regex) in patterns {
-    if path == schema_path {
+  for (path, pattern, is_property_name, regex) in patterns {
+    if path == schema_path && is_property_name == property_name {
       return Some((pattern, regex))
     }
   }

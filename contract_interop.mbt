@@ -2,11 +2,12 @@
 /// Import the supported object-oriented subset of JSON Schema.
 ///
 /// Supported validation keywords are `type`, `properties`, `required`,
-/// `items`, boolean `additionalProperties`, and acyclic local JSON Pointer
-/// `$ref` references. JSON Schema's default additional-properties behavior is
-/// preserved. Unsupported constraints raise `ContractError` instead of being
-/// silently discarded. The root schema must be compatible with the checker's
-/// object-root sample contract.
+/// `items`, boolean `additionalProperties`, `propertyNames`,
+/// `dependentRequired`, and acyclic local JSON Pointer `$ref` references.
+/// JSON Schema's default additional-properties behavior is preserved.
+/// Unsupported constraints raise `ContractError` instead of being silently
+/// discarded. The root schema must be compatible with the checker's object-root
+/// sample contract.
 pub fn ContractSchema::from_json_schema(
   schema : Json,
 ) -> ContractSchema raise ContractError {
@@ -119,7 +120,9 @@ fn contract_import_json_schema_node(
       let has_items = keywords.contains("items")
       let has_object_keywords = properties is Some(_) ||
         keywords.contains("required") ||
-        keywords.contains("additionalProperties")
+        keywords.contains("additionalProperties") ||
+        keywords.contains("propertyNames") ||
+        keywords.contains("dependentRequired")
       let kind = match type_name {
         Some(name) => contract_json_schema_kind(name, path)
         None if has_object_keywords => ContractKind::Object
@@ -160,6 +163,18 @@ fn contract_import_json_schema_node(
         !contract_kinds_equal(kind, ContractKind::Object) {
         raise InvalidJsonSchema(
           contract_json_schema_path_label(path) + ".additionalProperties",
+        )
+      }
+      if keywords.contains("propertyNames") &&
+        !contract_kinds_equal(kind, ContractKind::Object) {
+        raise InvalidJsonSchema(
+          contract_json_schema_path_label(path) + ".propertyNames",
+        )
+      }
+      if keywords.contains("dependentRequired") &&
+        !contract_kinds_equal(kind, ContractKind::Object) {
+        raise InvalidJsonSchema(
+          contract_json_schema_path_label(path) + ".dependentRequired",
         )
       }
 
@@ -420,6 +435,7 @@ fn contract_parse_json_schema_value_constraint(
       )
     None => ()
   }
+  contract_validate_json_schema_dependent_required(keywords, path)
   let constraint_keywords : Map[String, Json] = Map([])
   for
     name in [
@@ -440,10 +456,124 @@ fn contract_parse_json_schema_value_constraint(
         contract_json_schema_path_label(path) + ".uniqueItems",
       )
   }
+  match keywords.get("dependentRequired") {
+    Some(value) => constraint_keywords.set("dependentRequired", value)
+    None => ()
+  }
+  match keywords.get("propertyNames") {
+    Some(value) =>
+      constraint_keywords.set(
+        "propertyNames",
+        contract_validate_json_schema_property_names(
+          value,
+          contract_json_schema_path_label(path) + ".propertyNames",
+        ),
+      )
+    None => ()
+  }
   if constraint_keywords.is_empty() {
     None
   } else {
     Some(Json::object(constraint_keywords))
+  }
+}
+
+///|
+fn contract_validate_json_schema_dependent_required(
+  keywords : Map[String, Json],
+  path : String,
+) -> Unit raise ContractError {
+  match keywords.get("dependentRequired") {
+    Some(Object(dependencies)) =>
+      for (trigger, value) in dependencies {
+        match value {
+          Array(required_names) => {
+            for i = 0; i < required_names.length(); i = i + 1 {
+              for j = i + 1; j < required_names.length(); j = j + 1 {
+                if Json::equal(required_names[i], required_names[j]) {
+                  raise InvalidJsonSchema(
+                    contract_json_schema_path_label(path) +
+                    ".dependentRequired." +
+                    trigger,
+                  )
+                }
+              }
+            }
+            for name in required_names {
+              match name {
+                String(_) => ()
+                _ =>
+                  raise InvalidJsonSchema(
+                    contract_json_schema_path_label(path) +
+                    ".dependentRequired." +
+                    trigger,
+                  )
+              }
+            }
+          }
+          _ =>
+            raise InvalidJsonSchema(
+              contract_json_schema_path_label(path) +
+              ".dependentRequired." +
+              trigger,
+            )
+        }
+      }
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + ".dependentRequired",
+      )
+    None => ()
+  }
+}
+
+///|
+fn contract_validate_json_schema_property_names(
+  schema : Json,
+  path : String,
+) -> Json raise ContractError {
+  match schema {
+    True | False => schema
+    Object(keywords) => {
+      for (keyword, _) in keywords {
+        if keyword != "type" &&
+          keyword != "enum" &&
+          keyword != "const" &&
+          keyword != "pattern" &&
+          keyword != "minLength" &&
+          keyword != "maxLength" &&
+          !contract_json_schema_annotation_keyword_is_supported(keyword) {
+          raise UnsupportedJsonSchemaFeature(path, keyword)
+        }
+      }
+      match keywords.get("type") {
+        Some(String(name)) => ignore(contract_json_schema_kind(name, path))
+        Some(Array(_)) => raise UnsupportedJsonSchemaFeature(path, "type union")
+        Some(_) => raise InvalidJsonSchema(path + ".type")
+        None => ()
+      }
+      match keywords.get("pattern") {
+        Some(String(_)) | None => ()
+        Some(_) => raise InvalidJsonSchema(path + ".pattern")
+      }
+      ignore(contract_json_schema_count_keyword(keywords, "minLength", path))
+      ignore(contract_json_schema_count_keyword(keywords, "maxLength", path))
+      match keywords.get("enum") {
+        Some(Array(values)) if values.length() > 0 => {
+          for i = 0; i < values.length(); i = i + 1 {
+            for j = i + 1; j < values.length(); j = j + 1 {
+              if Json::equal(values[i], values[j]) {
+                raise InvalidJsonSchema(path + ".enum")
+              }
+            }
+          }
+          schema
+        }
+        Some(_) => raise InvalidJsonSchema(path + ".enum")
+        None => schema
+      }
+    }
+    _ => raise InvalidJsonSchema(path)
   }
 }
 
@@ -518,6 +648,8 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "required"
     | "items"
     | "additionalProperties"
+    | "propertyNames"
+    | "dependentRequired"
     | "enum"
     | "const"
     | "minimum"
