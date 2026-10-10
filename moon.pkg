@@ -1,3 +1,5 @@
 import {
   "LL124-Arch/stencil/src" @stencil,
+  "moonbitlang/core/bigint",
+  "moonbitlang/core/string",
 }

@@ -184,6 +184,7 @@ fn contract_check_many(
       "at least one sample is required",
     )
   }
+  let pattern_constraints = contract_compile_schema_patterns(schema)
   for i in 0..<samples.length() {
     let sample_source = if indexed_sample_sources {
       "sample[" + i.to_string() + "]"
@@ -191,7 +192,13 @@ fn contract_check_many(
       "sample"
     }
     sample_indices.set(sample_source, i)
-    contract_validate_sample(schema, samples[i], sample_source, diagnostics)
+    contract_validate_sample(
+      schema,
+      pattern_constraints,
+      samples[i],
+      sample_source,
+      diagnostics,
+    )
   }
   diagnostics.sort_by((left, right) => {
     contract_compare_diagnostics(left, right, sample_indices)
@@ -663,19 +670,20 @@ fn contract_schema_get_field(
 ///|
 fn contract_validate_sample(
   schema : ContractSchema,
+  pattern_constraints : Array[(String, String, @string.Regex)],
   sample : Json,
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
   contract_validate_value_constraints(
-    schema, "", sample, "", source, diagnostics,
+    schema, pattern_constraints, "", sample, "", source, diagnostics,
   )
   match sample {
     Object(_) => {
       for field in schema.fields {
         let parts = parse_contract_path(field.path).unwrap()
         contract_validate_field(
-          sample, parts, 0, "", "", field, schema, source, diagnostics,
+          sample, parts, 0, "", "", field, schema, pattern_constraints, source, diagnostics,
         )
       }
       contract_validate_extra_fields(
@@ -706,6 +714,7 @@ fn contract_validate_field(
   instance_path : String,
   field : ContractField,
   schema : ContractSchema,
+  pattern_constraints : Array[(String, String, @string.Regex)],
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
@@ -749,6 +758,7 @@ fn contract_validate_field(
             key_instance_path,
             field,
             schema,
+            pattern_constraints,
             source,
             diagnostics,
           )
@@ -781,11 +791,12 @@ fn contract_validate_path_value(
   instance_path : String,
   field : ContractField,
   schema : ContractSchema,
+  pattern_constraints : Array[(String, String, @string.Regex)],
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
   contract_validate_value_constraints(
-    schema, schema_path, value, instance_path, source, diagnostics,
+    schema, pattern_constraints, schema_path, value, instance_path, source, diagnostics,
   )
   if array_depth > 0 {
     match value {
@@ -801,6 +812,7 @@ fn contract_validate_path_value(
             contract_json_pointer_index(instance_path, item_index),
             field,
             schema,
+            pattern_constraints,
             source,
             diagnostics,
           )
@@ -846,6 +858,7 @@ fn contract_validate_path_value(
           instance_path,
           field,
           schema,
+          pattern_constraints,
           source,
           diagnostics,
         )
@@ -870,6 +883,7 @@ fn contract_validate_path_value(
 ///|
 fn contract_validate_value_constraints(
   schema : ContractSchema,
+  pattern_constraints : Array[(String, String, @string.Regex)],
   schema_path : String,
   value : Json,
   instance_path : String,
@@ -880,6 +894,40 @@ fn contract_validate_value_constraints(
     if constraint_path == schema_path {
       match constraint_json {
         Object(keywords) => {
+          match
+            (
+              value,
+              contract_find_schema_pattern(pattern_constraints, schema_path),
+            ) {
+            (String(text), Some((pattern, regex))) if regex.execute(text)
+              is None =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "match pattern " + pattern,
+                Json::string(text).stringify(),
+                "string does not match pattern at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("multipleOf")) {
+            (Number(_, ..), Some(Number(divisor, ..))) if !contract_json_number_is_multiple(
+                value,
+                Json::number(divisor),
+              ) =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "multiple of " + divisor.to_string(),
+                value.stringify(),
+                "number is not a multiple of the schema value at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
           match keywords.get("enum") {
             Some(Array(values)) => {
               let mut matches = false
@@ -1088,6 +1136,138 @@ fn contract_validate_value_constraints(
       }
     }
   }
+}
+
+///|
+fn contract_compile_schema_patterns(
+  schema : ContractSchema,
+) -> Array[(String, String, @string.Regex)] {
+  let result : Array[(String, String, @string.Regex)] = []
+  for (path, constraint) in schema.value_constraints {
+    match constraint {
+      Object(keywords) =>
+        match keywords.get("pattern") {
+          Some(String(pattern)) =>
+            result.push(
+              (
+                path,
+                pattern,
+                contract_compile_json_schema_pattern(pattern).unwrap(),
+              ),
+            )
+          _ => ()
+        }
+      _ => ()
+    }
+  }
+  result
+}
+
+///|
+fn contract_find_schema_pattern(
+  patterns : Array[(String, String, @string.Regex)],
+  schema_path : String,
+) -> (String, @string.Regex)? {
+  for (path, pattern, regex) in patterns {
+    if path == schema_path {
+      return Some((pattern, regex))
+    }
+  }
+  None
+}
+
+///|
+fn contract_json_number_is_multiple(value : Json, divisor : Json) -> Bool {
+  match (value, divisor) {
+    (Number(_, ..), Number(_, ..)) => {
+      let (value_integer, value_scale) = contract_decimal_parts(
+        value.stringify(),
+      )
+      let (divisor_integer, divisor_scale) = contract_decimal_parts(
+        divisor.stringify(),
+      )
+      let numerator = value_integer *
+        contract_bigint_power_of_ten(divisor_scale)
+      let denominator = divisor_integer *
+        contract_bigint_power_of_ten(value_scale)
+      (numerator % denominator).is_zero()
+    }
+    _ => true
+  }
+}
+
+///|
+fn contract_decimal_parts(value : String) -> (BigInt, Int) {
+  let normalized_exponent = value
+    .view()
+    .replace_all(old="E".view(), new="e".view())
+    .to_owned()
+  let exponent_parts : Array[String] = []
+  for part in normalized_exponent.view().split("e".view()) {
+    exponent_parts.push(part.to_owned())
+  }
+  let mantissa = exponent_parts[0]
+  let exponent = if exponent_parts.length() > 1 {
+    contract_parse_decimal_exponent(exponent_parts[1])
+  } else {
+    0
+  }
+  let decimal_parts : Array[String] = []
+  for part in mantissa.view().split(".".view()) {
+    decimal_parts.push(part.to_owned())
+  }
+  let fraction = if decimal_parts.length() > 1 { decimal_parts[1] } else { "" }
+  let mut digits = decimal_parts[0] + fraction
+  let negative = digits.view().has_prefix("-".view())
+  if negative {
+    digits = digits.view().strip_prefix("-".view()).unwrap().to_owned()
+  }
+  let mut integer = @bigint.BigInt::from_string(digits)
+  if negative {
+    integer = -integer
+  }
+  let mut scale = fraction.length() - exponent
+  if scale < 0 {
+    integer = integer * contract_bigint_power_of_ten(-scale)
+    scale = 0
+  }
+  (integer, scale)
+}
+
+///|
+fn contract_parse_decimal_exponent(value : String) -> Int {
+  let chars = value.to_array()
+  let mut index = 0
+  let negative = match chars.get(0) {
+    Some('-') => {
+      index = 1
+      true
+    }
+    Some('+') => {
+      index = 1
+      false
+    }
+    _ => false
+  }
+  let mut exponent = 0
+  for i in index..<chars.length() {
+    exponent = exponent * 10 + chars[i].to_int() - '0'.to_int()
+  }
+  if negative {
+    -exponent
+  } else {
+    exponent
+  }
+}
+
+///|
+fn contract_bigint_power_of_ten(power : Int) -> BigInt {
+  let mut result = @bigint.BigInt::from_int(1)
+  let ten = @bigint.BigInt::from_int(10)
+  for _ in 0..<power {
+    result = result * ten
+  }
+  result
 }
 
 ///|

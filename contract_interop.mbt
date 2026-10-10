@@ -405,11 +405,27 @@ fn contract_parse_json_schema_value_constraint(
     ] {
     ignore(contract_json_schema_count_keyword(keywords, keyword, path))
   }
+  match keywords.get("pattern") {
+    Some(String(_)) | None => ()
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + ".pattern",
+      )
+  }
+  match contract_json_schema_number_keyword(keywords, "multipleOf", path) {
+    Some(value) if value > 0.0 => ()
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + ".multipleOf",
+      )
+    None => ()
+  }
   let constraint_keywords : Map[String, Json] = Map([])
   for
     name in [
       "enum", "const", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
       "minItems", "maxItems", "minLength", "maxLength", "minProperties", "maxProperties",
+      "pattern", "multipleOf",
     ] {
     match keywords.get(name) {
       Some(value) => constraint_keywords.set(name, value)
@@ -515,6 +531,8 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "minProperties"
     | "maxProperties"
     | "uniqueItems"
+    | "pattern"
+    | "multipleOf"
     | "$defs"
     | "definitions"
     | "$schema"

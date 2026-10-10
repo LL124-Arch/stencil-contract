@@ -154,7 +154,29 @@ fn contract_schema_new(
       raise InvalidFieldPath(path)
     }
   }
+  for (path, constraint) in value_constraints {
+    match constraint {
+      Object(keywords) =>
+        match keywords.get("pattern") {
+          Some(String(pattern)) =>
+            if contract_compile_json_schema_pattern(pattern) is None {
+              raise InvalidJsonSchema(
+                contract_json_schema_path_label(path) + ".pattern",
+              )
+            }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
   { fields: copied, open_object_paths, value_constraints, }
+}
+
+///|
+fn contract_compile_json_schema_pattern(pattern : String) -> @string.Regex? {
+  Some(@string.Regex(pattern)) catch {
+    _ => None
+  }
 }
 
 ///|
