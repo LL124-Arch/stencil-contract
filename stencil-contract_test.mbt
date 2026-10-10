@@ -67,6 +67,10 @@ fn diagnostic_code_matches(
       @stencil-contract.ContractDiagnosticCode::TypeMismatch,
     )
     | (
+      @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+      @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+    )
+    | (
       @stencil-contract.ContractDiagnosticCode::UnexpectedField,
       @stencil-contract.ContractDiagnosticCode::UnexpectedField,
     )
@@ -1598,7 +1602,7 @@ test "JSON Schema import reports invalid and unsupported definitions" {
     ignore(
       @stencil-contract.ContractSchema::from_json_schema({
         "type": "object",
-        "properties": { "count": { "type": "number", "minimum": 0 } },
+        "patternProperties": { "^legacy_": { "type": "string" } },
       }),
     )
     "no error"
@@ -1609,7 +1613,7 @@ test "JSON Schema import reports invalid and unsupported definitions" {
   } noraise {
     _ => "no error"
   }
-  assert_eq(unsupported_keyword, "count:minimum")
+  assert_eq(unsupported_keyword, "$:patternProperties")
 
   let unsupported_union = try {
     ignore(
@@ -1668,6 +1672,241 @@ test "JSON Schema import reports invalid and unsupported definitions" {
   }
   assert_eq(
     required_unconstrained, "$:required property without a declared property schema",
+  )
+
+  let invalid_pattern = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "properties": { "code": { "type": "string", "pattern": "[" } },
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidJsonSchema(path) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(invalid_pattern, "code.pattern")
+
+  let invalid_multiple_of = try {
+    ignore(
+      @stencil-contract.ContractSchema::from_json_schema({
+        "type": "object",
+        "properties": { "price": { "type": "number", "multipleOf": 0 } },
+      }),
+    )
+    "no error"
+  } catch {
+    @stencil-contract.ContractError::InvalidJsonSchema(path) => path
+    _ => "wrong error"
+  } noraise {
+    _ => "no error"
+  }
+  assert_eq(invalid_multiple_of, "price.multipleOf")
+}
+
+///|
+test "JSON Schema pattern and multipleOf validate samples with stable paths" {
+  let schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["code", "price"],
+    "properties": {
+      "code": { "type": "string", "pattern": "^[A-Z]{2}-[0-9]{4}$" },
+      "price": { "type": "number", "multipleOf": 0.05 },
+    },
+  })
+  let template = "{{code}} {{price}}"
+  let valid = @stencil-contract.check_contract(template, schema, {
+    "code": "AB-1234",
+    "price": 12.35,
+  })
+  assert_true(valid.is_valid())
+
+  let invalid = @stencil-contract.check_contract(template, schema, {
+    "code": "ab-123",
+    "price": 12.31,
+  })
+  assert_false(invalid.is_valid())
+  let mut found_pattern = false
+  let mut found_multiple = false
+  for diagnostic in invalid.diagnostics {
+    match (diagnostic.code, diagnostic.path, diagnostic.instance_path) {
+      (
+        @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+        "code",
+        Some("/code"),
+      ) if diagnostic.source == "sample" => found_pattern = true
+      (
+        @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+        "price",
+        Some("/price"),
+      ) if diagnostic.source == "sample" => found_multiple = true
+      _ => ()
+    }
+  }
+  assert_true(found_pattern)
+  assert_true(found_multiple)
+}
+
+///|
+test "JSON Schema formats validate calendar values and UUIDs" {
+  let schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["date", "time", "created_at", "id"],
+    "properties": {
+      "date": { "type": "string", "format": "date" },
+      "time": { "type": "string", "format": "time" },
+      "created_at": { "type": "string", "format": "date-time" },
+      "id": { "type": "string", "format": "uuid" },
+    },
+  })
+  let template = "{{date}} {{time}} {{created_at}} {{id}}"
+  let valid = @stencil-contract.check_contract(template, schema, {
+    "date": "2024-02-29",
+    "time": "23:59:59.123+08:00",
+    "created_at": "2024-02-29T12:30:59Z",
+    "id": "550E8400-E29B-41D4-A716-446655440000",
+  })
+  assert_true(valid.is_valid())
+
+  let invalid = @stencil-contract.check_contract(template, schema, {
+    "date": "2023-02-29",
+    "time": "24:00:00Z",
+    "created_at": "2024-02-29T12:99:00Z",
+    "id": "not-a-uuid",
+  })
+  assert_false(invalid.is_valid())
+  for path in ["date", "time", "created_at", "id"] {
+    assert_true(
+      has_issue(
+        invalid,
+        @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+        path,
+      ),
+    )
+  }
+}
+
+///|
+test "JSON Schema propertyNames and dependentRequired enforce object rules" {
+  let schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "properties": {
+      "billing_address": { "type": "string" },
+      "billing_city": { "type": "string" },
+    },
+    "propertyNames": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 32,
+      "pattern": "^[a-z_]+$",
+    },
+    "dependentRequired": { "billing_address": ["billing_city"] },
+  })
+  let without_trigger = @stencil-contract.check_contract(
+    "{{billing_city}}",
+    schema,
+    { "billing_city": "Shanghai" },
+  )
+  assert_true(without_trigger.is_valid())
+
+  let invalid = @stencil-contract.check_contract(
+    "{{billing_address}}",
+    schema,
+    { "billing_address": "Road 1", "Bad-Key": true },
+  )
+  assert_false(invalid.is_valid())
+  let mut found_dependency = false
+  let mut found_name = false
+  for diagnostic in invalid.diagnostics {
+    match (diagnostic.code, diagnostic.path, diagnostic.instance_path) {
+      (
+        @stencil-contract.ContractDiagnosticCode::MissingRequiredField,
+        "billing_city",
+        Some("/billing_city"),
+      ) => found_dependency = true
+      (
+        @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+        "$.propertyNames",
+        Some("/Bad-Key"),
+      ) => found_name = true
+      _ => ()
+    }
+  }
+  assert_true(found_dependency)
+  assert_true(found_name)
+
+  let false_names_schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "propertyNames": false,
+  })
+  assert_true(
+    @stencil-contract.check_contract("", false_names_schema, {}).is_valid(),
+  )
+  let rejected_name = @stencil-contract.check_contract("", false_names_schema, {
+    "anything": 1,
+  })
+  assert_true(
+    has_issue(
+      rejected_name,
+      @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+      "$.propertyNames",
+    ),
+  )
+}
+
+///|
+test "JSON Schema propertyNames validates enum const and format" {
+  let enum_const_schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "propertyNames": {
+      "enum": ["id", "key"],
+      "const": "id",
+      "pattern": "^[a-z]+$",
+      "minLength": 2,
+      "maxLength": 3,
+    },
+  })
+  assert_true(
+    @stencil-contract.check_contract("", enum_const_schema, { "id": 1 }).is_valid(),
+  )
+  let invalid_name = @stencil-contract.check_contract("", enum_const_schema, {
+    "key": 1,
+    "Bad-Key": 2,
+  })
+  assert_false(invalid_name.is_valid())
+  assert_true(
+    has_issue(
+      invalid_name,
+      @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+      "$.propertyNames",
+    ),
+  )
+
+  let format_schema = @stencil-contract.ContractSchema::from_json_schema({
+    "type": "object",
+    "propertyNames": { "format": "uuid" },
+  })
+  assert_true(
+    @stencil-contract.check_contract("", format_schema, {
+      "550e8400-e29b-41d4-a716-446655440000": true,
+    }).is_valid(),
+  )
+  let invalid_format_name = @stencil-contract.check_contract(
+    "",
+    format_schema,
+    { "id": true },
+  )
+  assert_true(
+    has_issue(
+      invalid_format_name,
+      @stencil-contract.ContractDiagnosticCode::ConstraintViolation,
+      "$.propertyNames",
+    ),
   )
 }
 

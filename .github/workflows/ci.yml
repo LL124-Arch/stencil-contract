@@ -11,3 +11,4 @@ jobs:
       - run: moon check --deny-warn --target all
       - run: moon build
       - run: moon test --deny-warn --target all
+      - run: moon run examples/contract_demo

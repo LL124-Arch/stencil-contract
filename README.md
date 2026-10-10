@@ -3,6 +3,10 @@
 MoonBit package for checking data contracts used by Stencil templates and partials. It checks template paths against an explicit schema, validates a sample JSON value, and reports missing or cyclic partials.
 
 Rendering is provided by `LL124-Arch/stencil`.
+The checker is implemented in MoonBit and uses the Stencil package for template
+analysis. JSON Schema import supports the documented subset and returns an
+error for unsupported validation keywords instead of silently ignoring them.
+The project is licensed under Apache-2.0; see `LICENSE`.
 
 ## Define a contract
 
@@ -170,7 +174,31 @@ does not refer to a sample value.
 println(report.to_json().stringify())
 ```
 
+## Run the example
+
+The executable example checks a partial against an imported JSON Schema and
+prints reports for one valid and one invalid sample:
+
 ```sh
-moon check
-moon test
+moon run examples/contract_demo
+```
+
+Expected output:
+
+```text
+valid sample: {"valid":true,"diagnostics":[]}
+invalid sample: {"valid":false,"diagnostics":[{"severity":"error","code":"constraint_violation","source":"sample","path":"status","instance_path":"/status","expected":"one of [\"draft\",\"published\"]","actual":"\"review\"","message":"value is not in the allowed enum at status"}]}
+```
+
+## Validate changes
+
+Run the same checks used by CI from the repository root:
+
+```sh
+moon update
+moon fmt --check
+moon check --deny-warn --target all
+moon build
+moon test --deny-warn --target all
+moon run examples/contract_demo
 ```
