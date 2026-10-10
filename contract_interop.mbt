@@ -3,7 +3,8 @@
 ///
 /// Supported validation keywords are `type`, `properties`, `required`,
 /// `items`, boolean `additionalProperties`, `propertyNames`,
-/// `dependentRequired`, and acyclic local JSON Pointer `$ref` references.
+/// `dependentRequired`, the string formats `date`, `time`, `date-time`, and
+/// `uuid`, and acyclic local JSON Pointer `$ref` references.
 /// JSON Schema's default additional-properties behavior is preserved.
 /// Unsupported constraints raise `ContractError` instead of being silently
 /// discarded. The root schema must be compatible with the checker's object-root
@@ -427,6 +428,7 @@ fn contract_parse_json_schema_value_constraint(
         contract_json_schema_path_label(path) + ".pattern",
       )
   }
+  ignore(contract_json_schema_format_keyword(keywords, path))
   match contract_json_schema_number_keyword(keywords, "multipleOf", path) {
     Some(value) if value > 0.0 => ()
     Some(_) =>
@@ -441,7 +443,7 @@ fn contract_parse_json_schema_value_constraint(
     name in [
       "enum", "const", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
       "minItems", "maxItems", "minLength", "maxLength", "minProperties", "maxProperties",
-      "pattern", "multipleOf",
+      "pattern", "format", "multipleOf",
     ] {
     match keywords.get(name) {
       Some(value) => constraint_keywords.set(name, value)
@@ -540,6 +542,7 @@ fn contract_validate_json_schema_property_names(
           keyword != "enum" &&
           keyword != "const" &&
           keyword != "pattern" &&
+          keyword != "format" &&
           keyword != "minLength" &&
           keyword != "maxLength" &&
           !contract_json_schema_annotation_keyword_is_supported(keyword) {
@@ -556,6 +559,7 @@ fn contract_validate_json_schema_property_names(
         Some(String(_)) | None => ()
         Some(_) => raise InvalidJsonSchema(path + ".pattern")
       }
+      ignore(contract_json_schema_format_keyword(keywords, path))
       ignore(contract_json_schema_count_keyword(keywords, "minLength", path))
       ignore(contract_json_schema_count_keyword(keywords, "maxLength", path))
       match keywords.get("enum") {
@@ -621,6 +625,25 @@ fn contract_json_schema_count_keyword(
 }
 
 ///|
+fn contract_json_schema_format_keyword(
+  keywords : Map[String, Json],
+  path : String,
+) -> String? raise ContractError {
+  match keywords.get("format") {
+    Some(String(format)) if contract_json_schema_format_is_supported(format) =>
+      Some(format)
+    Some(String(format)) =>
+      raise UnsupportedJsonSchemaFeature(
+        contract_json_schema_path_label(path),
+        "format=" + format,
+      )
+    Some(_) =>
+      raise InvalidJsonSchema(contract_json_schema_path_label(path) + ".format")
+    None => None
+  }
+}
+
+///|
 fn contract_json_schema_kind(
   name : String,
   path : String,
@@ -664,6 +687,7 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "maxProperties"
     | "uniqueItems"
     | "pattern"
+    | "format"
     | "multipleOf"
     | "$defs"
     | "definitions"

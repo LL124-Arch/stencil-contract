@@ -70,16 +70,20 @@ keywords next to `$ref` return `ContractError`. Nested `$id` resource scopes
 are also rejected because they change how relative references resolve. The
 importer checks `enum`, `const`, numeric `minimum`/`maximum`, exclusive
 bounds and `multipleOf`, array `minItems`/`maxItems` and `uniqueItems`, string
-`minLength`/`maxLength` and `pattern`, and object `minProperties`/`maxProperties`.
+`minLength`/`maxLength`, `pattern`, and the `date`, `time`, `date-time`, and
+`uuid` formats, and object `minProperties`/`maxProperties`.
 String lengths count Unicode code points. `multipleOf` uses decimal integer
 arithmetic to avoid binary floating-point remainder errors. `pattern` uses
 MoonBit core's `Regex` syntax; patterns that the engine cannot compile return
 `ContractError`. Patterns are searched within the string unless anchored with
 `^` or `$`. A failed assertion produces a `constraint_violation` diagnostic
-with the schema path and concrete instance path. Other constraints such as
-`patternProperties`, `format`, and schema-composition keywords return
-`ContractError` instead of being discarded. `propertyNames` supports boolean
-schemas and the string `type`, `enum`, `const`, `pattern`, `minLength`, and
+with the schema path and concrete instance path. Formats use RFC 3339 date/time
+syntax and the hyphenated UUID text layout; unsupported formats such as
+`email` and `uri` return `ContractError`. Other constraints such as
+`patternProperties` and schema-composition keywords also return `ContractError`
+instead of being discarded. The recognized formats are enforced as assertions
+by this checker. `propertyNames` supports boolean schemas and the
+string `type`, `enum`, `const`, `pattern`, `format`, `minLength`, and
 `maxLength` assertions; a name failure points to that key's JSON Pointer.
 `dependentRequired` reports a missing dependent property only when its trigger
 property is present. The root remains subject to this checker's Object
@@ -92,6 +96,9 @@ let imported_schema = @contract.ContractSchema::from_json_schema({
   "required": ["id"],
   "properties": {
     "id": { "type": "integer" },
+    "request_id": { "type": "string", "format": "uuid" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "delivery_date": { "type": "string", "format": "date" },
     "status": { "enum": ["draft", "published"] },
     "score": { "type": "number", "minimum": 0, "exclusiveMaximum": 100 },
     "code": { "type": "string", "pattern": "^[A-Z]{2}-[0-9]{4}$" },

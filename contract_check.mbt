@@ -1082,6 +1082,21 @@ fn contract_validate_value_constraints(
               )
             _ => ()
           }
+          match (value, keywords.get("format")) {
+            (String(text), Some(String(format))) if !contract_json_schema_format_matches(
+                format, text,
+              ) =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "valid " + format,
+                Json::string(text).stringify(),
+                "string does not match format " + format + " at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
           match (value, keywords.get("minProperties")) {
             (Object(properties), Some(Number(minimum, ..))) if properties
               .length()
@@ -1341,6 +1356,21 @@ fn contract_validate_property_name(
             "at most \{maximum.to_string()} characters",
             "\{name.char_length()} characters",
             "property name is longer than maxLength",
+            diagnostics,
+          )
+        _ => ()
+      }
+      match keywords.get("format") {
+        Some(String(format)) if !contract_json_schema_format_matches(
+            format, name,
+          ) =>
+          contract_add_constraint_violation(
+            source,
+            schema_path,
+            instance_path,
+            "valid " + format,
+            value.stringify(),
+            "property name does not match format " + format,
             diagnostics,
           )
         _ => ()
