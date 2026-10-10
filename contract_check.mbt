@@ -1000,6 +1000,89 @@ fn contract_validate_value_constraints(
               )
             _ => ()
           }
+          match (value, keywords.get("minLength")) {
+            (String(text), Some(Number(minimum, ..))) if text
+              .char_length()
+              .to_double() <
+              minimum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at least \{minimum.to_string()} characters",
+                "\{text.char_length()} characters",
+                "string is shorter than minLength at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("maxLength")) {
+            (String(text), Some(Number(maximum, ..))) if text
+              .char_length()
+              .to_double() >
+              maximum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at most \{maximum.to_string()} characters",
+                "\{text.char_length()} characters",
+                "string is longer than maxLength at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("minProperties")) {
+            (Object(properties), Some(Number(minimum, ..))) if properties
+              .length()
+              .to_double() <
+              minimum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at least \{minimum.to_string()} properties",
+                "\{properties.length()} properties",
+                "object has fewer than minProperties at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("maxProperties")) {
+            (Object(properties), Some(Number(maximum, ..))) if properties
+              .length()
+              .to_double() >
+              maximum =>
+              contract_add_constraint_violation(
+                source,
+                schema_path,
+                instance_path,
+                "at most \{maximum.to_string()} properties",
+                "\{properties.length()} properties",
+                "object has more than maxProperties at \{schema_path}",
+                diagnostics,
+              )
+            _ => ()
+          }
+          match (value, keywords.get("uniqueItems")) {
+            (Array(items), Some(True)) =>
+              for i = 0; i < items.length(); i = i + 1 {
+                for j = i + 1; j < items.length(); j = j + 1 {
+                  if Json::equal(items[i], items[j]) {
+                    contract_add_constraint_violation(
+                      source,
+                      schema_path,
+                      contract_json_pointer_index(instance_path, j),
+                      "unique item",
+                      items[j].stringify(),
+                      "array contains a duplicate item at \{schema_path}",
+                      diagnostics,
+                    )
+                  }
+                }
+              }
+            _ => ()
+          }
         }
         _ => ()
       }

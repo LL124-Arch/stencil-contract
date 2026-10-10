@@ -68,11 +68,12 @@ use site, including references inside array `items`. Pointer tokens decode
 keywords next to `$ref` return `ContractError`. Nested `$id` resource scopes
 are also rejected because they change how relative references resolve. The
 importer checks `enum`, `const`, numeric `minimum`/`maximum` and exclusive
-bounds, and array `minItems`/`maxItems`. A failed assertion produces a
-`constraint_violation` diagnostic with the schema path and concrete instance
-path. Other constraints such as `pattern`, string lengths, `multipleOf`, and
-`uniqueItems` return `ContractError` instead of being discarded. The root
-remains subject to this checker's Object requirement.
+bounds, array `minItems`/`maxItems` and `uniqueItems`, string `minLength`/
+`maxLength`, and object `minProperties`/`maxProperties`. String lengths count
+Unicode code points. A failed assertion produces a `constraint_violation`
+diagnostic with the schema path and concrete instance path. Other constraints
+such as `pattern` and `multipleOf` return `ContractError` instead of being
+discarded. The root remains subject to this checker's Object requirement.
 
 ```moonbit
 let imported_schema = @contract.ContractSchema::from_json_schema({
@@ -86,7 +87,8 @@ let imported_schema = @contract.ContractSchema::from_json_schema({
     "labels": {
       "type": "array",
       "minItems": 1,
-      "items": { "type": "string" },
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
     },
   },
 })

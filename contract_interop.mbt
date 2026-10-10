@@ -399,18 +399,30 @@ fn contract_parse_json_schema_value_constraint(
   ignore(
     contract_json_schema_number_keyword(keywords, "exclusiveMaximum", path),
   )
-  ignore(contract_json_schema_count_keyword(keywords, "minItems", path))
-  ignore(contract_json_schema_count_keyword(keywords, "maxItems", path))
+  for
+    keyword in [
+      "minItems", "maxItems", "minLength", "maxLength", "minProperties", "maxProperties",
+    ] {
+    ignore(contract_json_schema_count_keyword(keywords, keyword, path))
+  }
   let constraint_keywords : Map[String, Json] = Map([])
   for
     name in [
       "enum", "const", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
-      "minItems", "maxItems",
+      "minItems", "maxItems", "minLength", "maxLength", "minProperties", "maxProperties",
     ] {
     match keywords.get(name) {
       Some(value) => constraint_keywords.set(name, value)
       None => ()
     }
+  }
+  match keywords.get("uniqueItems") {
+    Some(True) => constraint_keywords.set("uniqueItems", Json::boolean(true))
+    Some(False) | None => ()
+    Some(_) =>
+      raise InvalidJsonSchema(
+        contract_json_schema_path_label(path) + ".uniqueItems",
+      )
   }
   if constraint_keywords.is_empty() {
     None
@@ -498,6 +510,11 @@ fn contract_json_schema_keyword_is_supported(keyword : String) -> Bool {
     | "exclusiveMaximum"
     | "minItems"
     | "maxItems"
+    | "minLength"
+    | "maxLength"
+    | "minProperties"
+    | "maxProperties"
+    | "uniqueItems"
     | "$defs"
     | "definitions"
     | "$schema"
