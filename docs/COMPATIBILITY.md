@@ -145,6 +145,8 @@ ISL 导入保障由两层证据组成：编译后的真实约束正反例，以�
 运行 [integration/verify.py](../integration/verify.py) 可重跑库检查、四目标测试、
 ISL 重生成一致性、真实渲染和 CLI 负例；结果保存在
 [integration/verification.json](../integration/verification.json)。
+复现基线固定 compiler/core `0.10.14+7d59c7ec9`，moon `0.1.20260920`；
+不把此基线上的通过结果表述为对未来工具链版本的无条件兼容。
 
 规范依据：[Ion Schema 2.0](https://amazon-ion.github.io/ion-schema/docs/isl-2-0/spec)、
 [JSON Schema 2020-12 Validation](https://json-schema.org/draft/2020-12/json-schema-validation)。

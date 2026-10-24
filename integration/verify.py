@@ -54,6 +54,7 @@ def main():
             raise RuntimeError(f"{name}: dependency contains tracked modifications")
 
     version, _ = execute(["moon", "version"], ROOT)
+    compiler, _ = execute(["moonc", "-v"], ROOT)
     api_path = ROOT / "pkg.generated.mbti"
     api_before = digest(api_path)
     for args, label in [
@@ -113,7 +114,8 @@ def main():
             negative.append({"case": name, "exit_code": code, "output_unchanged": True})
             print(name + ": rejected as expected", flush=True)
 
-    report = {"status": "passed", "toolchain": version, "dependency_revisions": PINNED,
+    report = {"status": "passed", "toolchain": version, "compiler": compiler,
+              "dependency_revisions": PINNED,
               "schema_sha256": {name: digest(HERE / name) for name in ["common.isl", "order.isl"]},
               "generated_sha256": digest(generated), "checks": records,
               "negative_cli_cases": negative, "pipeline": rendered}

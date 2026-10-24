@@ -6,6 +6,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hustcer/setup-moonbit@v1
+        with:
+          version: 0.10.14+7d59c7ec9
+          core-version: 0.10.14+7d59c7ec9
       - run: moon update
       - run: moon fmt --check
       - run: moon check --deny-warn --target all
@@ -29,6 +32,9 @@ jobs:
           ref: f956351ddbed8aa87b0895b68246b2c2308f80cb
           path: ion-patch
       - uses: hustcer/setup-moonbit@v1
+        with:
+          version: 0.10.14+7d59c7ec9
+          core-version: 0.10.14+7d59c7ec9
       - run: moon update
         working-directory: stencil-contract
       - run: moon update

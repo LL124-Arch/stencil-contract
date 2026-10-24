@@ -5,7 +5,9 @@
 
 ## 复现
 
-需要 Python 3、Git 和支持 moon.work 的 MoonBit 工具链；使用的工具链版本会写入结果。
+需要 Python 3、Git 和 MoonBit 工具链；复现基线为 compiler/core
+`0.10.14+7d59c7ec9`（moon `0.1.20260920`）。CI 固定编译器及 core，
+避免 latest 的语法/格式迁移改变生成一致性；使用版本会写入结果。
 在同一父目录准备三个仓库。stencil-contract 使用本次修订版本，其余两个固定如下：
 
 ```sh

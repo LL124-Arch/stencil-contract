@@ -1,6 +1,7 @@
 {
   "status": "passed",
   "toolchain": "moon 0.1.20260920 (914d7da 2026-09-20)\n\nFeature flags enabled: rr_moon_mod,rr_moon_pkg",
+  "compiler": "v0.10.14+7d59c7ec9 (2026-09-18)",
   "dependency_revisions": {
     "ion-schema-codegen": "558dc610cdbb559a1e46d4ee285a702b72dfc65b",
     "ion-patch": "f956351ddbed8aa87b0895b68246b2c2308f80cb"
