@@ -675,6 +675,13 @@ fn contract_validate_sample(
   source : String,
   diagnostics : Array[ContractDiagnostic],
 ) -> Unit {
+  if !contract_json_numbers_supported(sample) {
+    contract_add_constraint_violation(
+      source, "", "", "supported exact JSON numbers", "invalid or oversized numeric token",
+      "sample contains an invalid numeric representation", diagnostics,
+    )
+    return
+  }
   contract_validate_value_constraints(
     schema, pattern_constraints, "", sample, "", source, diagnostics,
   )
@@ -915,15 +922,14 @@ fn contract_validate_value_constraints(
             _ => ()
           }
           match (value, keywords.get("multipleOf")) {
-            (Number(_, ..), Some(Number(divisor, ..))) if !contract_json_number_is_multiple(
-                value,
-                Json::number(divisor),
+            (Number(_, ..), Some(Number(_, ..) as divisor)) if !contract_json_number_is_multiple(
+                value, divisor,
               ) =>
               contract_add_constraint_violation(
                 source,
                 schema_path,
                 instance_path,
-                "multiple of " + divisor.to_string(),
+                "multiple of " + divisor.stringify(),
                 value.stringify(),
                 "number is not a multiple of the schema value at \{schema_path}",
                 diagnostics,
@@ -934,7 +940,7 @@ fn contract_validate_value_constraints(
             Some(Array(values)) => {
               let mut matches = false
               for allowed in values {
-                if Json::equal(value, allowed) {
+                if contract_json_equal(value, allowed) {
                   matches = true
                 }
               }
@@ -954,7 +960,7 @@ fn contract_validate_value_constraints(
           }
 
           match keywords.get("const") {
-            Some(expected) if !Json::equal(value, expected) =>
+            Some(expected) if !contract_json_equal(value, expected) =>
               contract_add_constraint_violation(
                 source,
                 schema_path,
@@ -966,57 +972,39 @@ fn contract_validate_value_constraints(
               )
             _ => ()
           }
-          match (value, keywords.get("minimum")) {
-            (Number(actual, ..), Some(Number(minimum, ..))) if actual < minimum =>
-              contract_add_constraint_violation(
-                source,
-                schema_path,
-                instance_path,
-                ">= " + minimum.to_string(),
-                actual.to_string(),
-                "number is below minimum at \{schema_path}",
-                diagnostics,
-              )
-            _ => ()
-          }
-          match (value, keywords.get("maximum")) {
-            (Number(actual, ..), Some(Number(maximum, ..))) if actual > maximum =>
-              contract_add_constraint_violation(
-                source,
-                schema_path,
-                instance_path,
-                "<= " + maximum.to_string(),
-                actual.to_string(),
-                "number is above maximum at \{schema_path}",
-                diagnostics,
-              )
-            _ => ()
-          }
-          match (value, keywords.get("exclusiveMinimum")) {
-            (Number(actual, ..), Some(Number(minimum, ..))) if actual <= minimum =>
-              contract_add_constraint_violation(
-                source,
-                schema_path,
-                instance_path,
-                "> " + minimum.to_string(),
-                actual.to_string(),
-                "number does not exceed exclusive minimum at \{schema_path}",
-                diagnostics,
-              )
-            _ => ()
-          }
-          match (value, keywords.get("exclusiveMaximum")) {
-            (Number(actual, ..), Some(Number(maximum, ..))) if actual >= maximum =>
-              contract_add_constraint_violation(
-                source,
-                schema_path,
-                instance_path,
-                "< " + maximum.to_string(),
-                actual.to_string(),
-                "number does not meet exclusive maximum at \{schema_path}",
-                diagnostics,
-              )
-            _ => ()
+          for
+            (keyword, comparison) in [
+              ("minimum", ">= "),
+              ("maximum", "<= "),
+              ("exclusiveMinimum", "> "),
+              ("exclusiveMaximum", "< "),
+            ] {
+            match (value, keywords.get(keyword)) {
+              (Number(_, ..), Some(bound)) => {
+                let violates = match contract_number_compare(value, bound) {
+                  Some(order) =>
+                    match keyword {
+                      "minimum" => order < 0
+                      "maximum" => order > 0
+                      "exclusiveMinimum" => order <= 0
+                      _ => order >= 0
+                    }
+                  None => true
+                }
+                if violates {
+                  contract_add_constraint_violation(
+                    source,
+                    schema_path,
+                    instance_path,
+                    comparison + bound.stringify(),
+                    value.stringify(),
+                    "number violates " + keyword + " at " + schema_path,
+                    diagnostics,
+                  )
+                }
+              }
+              _ => ()
+            }
           }
           match (value, keywords.get("minItems")) {
             (Array(items), Some(Number(minimum, ..))) if items
@@ -1133,7 +1121,7 @@ fn contract_validate_value_constraints(
             (Array(items), Some(True)) =>
               for i = 0; i < items.length(); i = i + 1 {
                 for j = i + 1; j < items.length(); j = j + 1 {
-                  if Json::equal(items[i], items[j]) {
+                  if contract_json_equal(items[i], items[j]) {
                     contract_add_constraint_violation(
                       source,
                       schema_path,
@@ -1284,7 +1272,7 @@ fn contract_validate_property_name(
         Some(Array(values)) => {
           let mut matches = false
           for allowed in values {
-            if Json::equal(value, allowed) {
+            if contract_json_equal(value, allowed) {
               matches = true
             }
           }
@@ -1303,7 +1291,7 @@ fn contract_validate_property_name(
         _ => ()
       }
       match keywords.get("const") {
-        Some(expected) if !Json::equal(value, expected) =>
+        Some(expected) if !contract_json_equal(value, expected) =>
           contract_add_constraint_violation(
             source,
             schema_path,
@@ -1392,100 +1380,6 @@ fn contract_find_schema_pattern(
     }
   }
   None
-}
-
-///|
-fn contract_json_number_is_multiple(value : Json, divisor : Json) -> Bool {
-  match (value, divisor) {
-    (Number(_, ..), Number(_, ..)) => {
-      let (value_integer, value_scale) = contract_decimal_parts(
-        value.stringify(),
-      )
-      let (divisor_integer, divisor_scale) = contract_decimal_parts(
-        divisor.stringify(),
-      )
-      let numerator = value_integer *
-        contract_bigint_power_of_ten(divisor_scale)
-      let denominator = divisor_integer *
-        contract_bigint_power_of_ten(value_scale)
-      (numerator % denominator).is_zero()
-    }
-    _ => true
-  }
-}
-
-///|
-fn contract_decimal_parts(value : String) -> (BigInt, Int) {
-  let normalized_exponent = value
-    .view()
-    .replace_all(old="E".view(), new="e".view())
-    .to_owned()
-  let exponent_parts : Array[String] = []
-  for part in normalized_exponent.view().split("e".view()) {
-    exponent_parts.push(part.to_owned())
-  }
-  let mantissa = exponent_parts[0]
-  let exponent = if exponent_parts.length() > 1 {
-    contract_parse_decimal_exponent(exponent_parts[1])
-  } else {
-    0
-  }
-  let decimal_parts : Array[String] = []
-  for part in mantissa.view().split(".".view()) {
-    decimal_parts.push(part.to_owned())
-  }
-  let fraction = if decimal_parts.length() > 1 { decimal_parts[1] } else { "" }
-  let mut digits = decimal_parts[0] + fraction
-  let negative = digits.view().has_prefix("-".view())
-  if negative {
-    digits = digits.view().strip_prefix("-".view()).unwrap().to_owned()
-  }
-  let mut integer = @bigint.BigInt::from_string(digits)
-  if negative {
-    integer = -integer
-  }
-  let mut scale = fraction.length() - exponent
-  if scale < 0 {
-    integer = integer * contract_bigint_power_of_ten(-scale)
-    scale = 0
-  }
-  (integer, scale)
-}
-
-///|
-fn contract_parse_decimal_exponent(value : String) -> Int {
-  let chars = value.to_array()
-  let mut index = 0
-  let negative = match chars.get(0) {
-    Some('-') => {
-      index = 1
-      true
-    }
-    Some('+') => {
-      index = 1
-      false
-    }
-    _ => false
-  }
-  let mut exponent = 0
-  for i in index..<chars.length() {
-    exponent = exponent * 10 + chars[i].to_int() - '0'.to_int()
-  }
-  if negative {
-    -exponent
-  } else {
-    exponent
-  }
-}
-
-///|
-fn contract_bigint_power_of_ten(power : Int) -> BigInt {
-  let mut result = @bigint.BigInt::from_int(1)
-  let ten = @bigint.BigInt::from_int(10)
-  for _ in 0..<power {
-    result = result * ten
-  }
-  result
 }
 
 ///|

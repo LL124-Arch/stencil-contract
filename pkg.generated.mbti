@@ -12,6 +12,8 @@ pub fn check_contract_with_partials(String, Map[String, String], ContractSchema,
 
 pub fn check_contract_with_partials_and_context(String, Map[String, String], ContractSchema, Json) -> ContractReport
 
+pub fn parse_contract_json(String) -> Json raise ContractError
+
 // Errors
 pub(all) suberror ContractError {
   InvalidFieldPath(String)
@@ -19,6 +21,7 @@ pub(all) suberror ContractError {
   InvalidParentKind(String, ContractKind, ContractKind)
   InvalidJsonSchema(String)
   UnsupportedJsonSchemaFeature(String, String)
+  InvalidJsonText(String)
 }
 
 // Types and methods
@@ -57,6 +60,7 @@ pub(all) enum ContractKind {
   Null
   Bool
   Number
+  Integer
   String
   Array
   Object
@@ -79,6 +83,7 @@ pub struct ContractSchema {
   value_constraints : Array[(String, Json)]
 }
 pub fn ContractSchema::from_json_schema(Json) -> Self raise ContractError
+pub fn ContractSchema::from_json_schema_text(String) -> Self raise ContractError
 pub fn ContractSchema::new(Array[ContractField]) -> Self raise ContractError
 
 pub(all) enum ContractSeverity {

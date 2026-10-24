@@ -6,6 +6,7 @@ pub(all) enum ContractKind {
   Null
   Bool
   Number
+  Integer
   String
   Array
   Object
@@ -37,6 +38,7 @@ pub(all) suberror ContractError {
   InvalidParentKind(String, ContractKind, ContractKind)
   InvalidJsonSchema(String)
   UnsupportedJsonSchemaFeature(String, String)
+  InvalidJsonText(String)
 }
 
 ///|
@@ -282,6 +284,7 @@ fn contract_kind_name(kind : ContractKind) -> String {
     ContractKind::Null => "Null"
     ContractKind::Bool => "Bool"
     ContractKind::Number => "Number"
+    ContractKind::Integer => "Integer"
     ContractKind::String => "String"
     ContractKind::Array => "Array"
     ContractKind::Object => "Object"
@@ -310,7 +313,8 @@ fn contract_kind_matches(kind : ContractKind, value : Json) -> Bool {
         True | False => true
         _ => false
       }
-    ContractKind::Number => value is Number(_, ..)
+    ContractKind::Number => contract_number_parts(value) is Some(_)
+    ContractKind::Integer => contract_number_is_integer(value)
     ContractKind::String => value is String(_)
     ContractKind::Array => value is Array(_)
     ContractKind::Object => value is Object(_)
@@ -324,6 +328,7 @@ fn contract_kinds_equal(left : ContractKind, right : ContractKind) -> Bool {
     | (ContractKind::Null, ContractKind::Null)
     | (ContractKind::Bool, ContractKind::Bool)
     | (ContractKind::Number, ContractKind::Number)
+    | (ContractKind::Integer, ContractKind::Integer)
     | (ContractKind::String, ContractKind::String)
     | (ContractKind::Array, ContractKind::Array)
     | (ContractKind::Object, ContractKind::Object) => true

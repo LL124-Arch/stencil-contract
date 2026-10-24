@@ -12,6 +12,11 @@
 pub fn ContractSchema::from_json_schema(
   schema : Json,
 ) -> ContractSchema raise ContractError {
+  if !contract_json_numbers_supported(schema) {
+    raise InvalidJsonSchema(
+      "numeric token/exponent outside the supported profile",
+    )
+  }
   let fields : Array[ContractField] = []
   let open_object_paths : Array[String] = []
   let active_refs : Array[String] = []
@@ -47,6 +52,15 @@ fn contract_import_json_schema_node(
         "false schema",
       )
     Object(keywords) => {
+      match keywords.get("$schema") {
+        Some(String("https://json-schema.org/draft/2020-12/schema")) | None =>
+          ()
+        Some(_) =>
+          raise UnsupportedJsonSchemaFeature(
+            contract_json_schema_path_label(path),
+            "$schema dialect",
+          )
+      }
       contract_validate_json_schema_definitions(keywords, path)
       if keywords.contains("$id") &&
         (path.length() > 0 || active_refs.length() > 0) {
@@ -124,6 +138,12 @@ fn contract_import_json_schema_node(
         keywords.contains("additionalProperties") ||
         keywords.contains("propertyNames") ||
         keywords.contains("dependentRequired")
+      if !is_root && type_name is None && (has_object_keywords || has_items) {
+        raise UnsupportedJsonSchemaFeature(
+          contract_json_schema_path_label(path),
+          "structural keywords without an explicit type",
+        )
+      }
       let kind = match type_name {
         Some(name) => contract_json_schema_kind(name, path)
         None if has_object_keywords => ContractKind::Object
@@ -198,7 +218,7 @@ fn contract_import_json_schema_node(
         match properties {
           Some(property_map) =>
             for (name, property_schema) in property_map {
-              let property_path = contract_join_path(path, name)
+              let property_path = contract_json_schema_property_path(path, name)
               contract_import_json_schema_node(
                 root_schema,
                 property_schema,
@@ -223,7 +243,7 @@ fn contract_import_json_schema_node(
                   "required property without a declared property schema",
                 )
               }
-              let property_path = contract_join_path(path, name)
+              let property_path = contract_json_schema_property_path(path, name)
               fields.push({
                 path: property_path,
                 kind: ContractKind::Any,
@@ -394,7 +414,7 @@ fn contract_parse_json_schema_value_constraint(
     Some(Array(values)) if values.length() > 0 => {
       for i = 0; i < values.length(); i = i + 1 {
         for j = i + 1; j < values.length(); j = j + 1 {
-          if Json::equal(values[i], values[j]) {
+          if contract_json_equal(values[i], values[j]) {
             raise InvalidJsonSchema(
               contract_json_schema_path_label(path) + ".enum",
             )
@@ -430,7 +450,8 @@ fn contract_parse_json_schema_value_constraint(
   }
   ignore(contract_json_schema_format_keyword(keywords, path))
   match contract_json_schema_number_keyword(keywords, "multipleOf", path) {
-    Some(value) if value > 0.0 => ()
+    Some(value) if contract_number_compare(value, Json::number(0.0)) == Some(1) =>
+      ()
     Some(_) =>
       raise InvalidJsonSchema(
         contract_json_schema_path_label(path) + ".multipleOf",
@@ -488,11 +509,12 @@ fn contract_validate_json_schema_dependent_required(
   match keywords.get("dependentRequired") {
     Some(Object(dependencies)) =>
       for (trigger, value) in dependencies {
+        ignore(contract_json_schema_property_path(path, trigger))
         match value {
           Array(required_names) => {
             for i = 0; i < required_names.length(); i = i + 1 {
               for j = i + 1; j < required_names.length(); j = j + 1 {
-                if Json::equal(required_names[i], required_names[j]) {
+                if contract_json_equal(required_names[i], required_names[j]) {
                   raise InvalidJsonSchema(
                     contract_json_schema_path_label(path) +
                     ".dependentRequired." +
@@ -503,7 +525,8 @@ fn contract_validate_json_schema_dependent_required(
             }
             for name in required_names {
               match name {
-                String(_) => ()
+                String(name) =>
+                  ignore(contract_json_schema_property_path(path, name))
                 _ =>
                   raise InvalidJsonSchema(
                     contract_json_schema_path_label(path) +
@@ -566,7 +589,7 @@ fn contract_validate_json_schema_property_names(
         Some(Array(values)) if values.length() > 0 => {
           for i = 0; i < values.length(); i = i + 1 {
             for j = i + 1; j < values.length(); j = j + 1 {
-              if Json::equal(values[i], values[j]) {
+              if contract_json_equal(values[i], values[j]) {
                 raise InvalidJsonSchema(path + ".enum")
               }
             }
@@ -586,20 +609,16 @@ fn contract_json_schema_number_keyword(
   keywords : Map[String, Json],
   keyword : String,
   path : String,
-) -> Double? raise ContractError {
+) -> Json? raise ContractError {
   match keywords.get(keyword) {
-    Some(Number(value, ..)) => {
-      let representation = value.to_string()
-      if value == value &&
-        representation != "Infinity" &&
-        representation != "-Infinity" {
+    Some(Number(_, ..) as value) =>
+      if contract_number_parts(value) is Some(_) {
         Some(value)
       } else {
         raise InvalidJsonSchema(
           contract_json_schema_path_label(path) + "." + keyword,
         )
       }
-    }
     Some(_) =>
       raise InvalidJsonSchema(
         contract_json_schema_path_label(path) + "." + keyword,
@@ -613,9 +632,11 @@ fn contract_json_schema_count_keyword(
   keywords : Map[String, Json],
   keyword : String,
   path : String,
-) -> Double? raise ContractError {
+) -> Json? raise ContractError {
   match contract_json_schema_number_keyword(keywords, keyword, path) {
-    Some(value) if value >= 0.0 && value.floor() == value => Some(value)
+    Some(value) if contract_number_is_integer(value) &&
+      contract_number_compare(value, Json::number(0.0)) != Some(-1) =>
+      Some(value)
     Some(_) =>
       raise InvalidJsonSchema(
         contract_json_schema_path_label(path) + "." + keyword,
@@ -653,7 +674,8 @@ fn contract_json_schema_kind(
     "array" => ContractKind::Array
     "null" => ContractKind::Null
     "boolean" => ContractKind::Bool
-    "number" | "integer" => ContractKind::Number
+    "number" => ContractKind::Number
+    "integer" => ContractKind::Integer
     "string" => ContractKind::String
     _ =>
       raise UnsupportedJsonSchemaFeature(
@@ -740,6 +762,23 @@ fn contract_json_schema_path_label(path : String) -> String {
   } else {
     path
   }
+}
+
+///|
+fn contract_json_schema_property_path(
+  parent : String,
+  name : String,
+) -> String raise ContractError {
+  if name == "" ||
+    name.contains(".") ||
+    name.contains("[") ||
+    name.contains("]") {
+    raise UnsupportedJsonSchemaFeature(
+      contract_json_schema_path_label(parent),
+      "property name cannot be represented as a contract path: " + name,
+    )
+  }
+  contract_join_path(parent, name)
 }
 
 ///|
