@@ -1,0 +1,208 @@
+{
+  "status": "passed",
+  "toolchain": "moon 0.1.20260920 (914d7da 2026-09-20)\n\nFeature flags enabled: rr_moon_mod,rr_moon_pkg",
+  "dependency_revisions": {
+    "ion-schema-codegen": "558dc610cdbb559a1e46d4ee285a702b72dfc65b",
+    "ion-patch": "f956351ddbed8aa87b0895b68246b2c2308f80cb"
+  },
+  "schema_sha256": {
+    "common.isl": "61abc993919049c398c20f7c3f5f610ebe82dddbe84ffcd540e4f7cc19f1fddc",
+    "order.isl": "2142a5db7142457c28a1e19e8b423dd7f440776674065cd138c104dd318ba0cd"
+  },
+  "generated_sha256": "ddabbd103f24f09a989548d7f740a2abb0ade90c528cae3d4b16af68c7d73e5f",
+  "checks": [
+    {
+      "check": "library-format",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "fmt",
+        "--check"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "library-check",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "check",
+        "--deny-warn",
+        "--target",
+        "all"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "library-build",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "build",
+        "--target",
+        "all"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "library-tests",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "test",
+        "--deny-warn",
+        "--target",
+        "all"
+      ],
+      "exit_code": 0,
+      "test_summaries": [
+        "Total tests: 40, passed: 40, failed: 0. [wasm]",
+        "Total tests: 40, passed: 40, failed: 0. [wasm-gc]",
+        "Total tests: 40, passed: 40, failed: 0. [js]",
+        "Total tests: 40, passed: 40, failed: 0. [native]"
+      ]
+    },
+    {
+      "check": "library-public-api",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "info"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "library-demo",
+      "cwd": "..",
+      "command": [
+        "moon",
+        "run",
+        "--target",
+        "native",
+        "examples/contract_demo"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "isl-import-regeneration",
+      "cwd": "../../ion-schema-codegen",
+      "command": [
+        "moon",
+        "run",
+        "--target",
+        "native",
+        "./cli",
+        "../stencil-contract/integration/order.isl",
+        "../stencil-contract/integration/generated.mbt"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "integration-format",
+      "cwd": ".",
+      "command": [
+        "moon",
+        "fmt",
+        ".",
+        "./cmd"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "integration-check",
+      "cwd": ".",
+      "command": [
+        "moon",
+        "check",
+        "--target",
+        "all",
+        "--deny-warn"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "integration-build",
+      "cwd": ".",
+      "command": [
+        "moon",
+        "build",
+        "--target",
+        "all"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    },
+    {
+      "check": "integration-test",
+      "cwd": ".",
+      "command": [
+        "moon",
+        "test",
+        "--target",
+        "all",
+        "--deny-warn",
+        "."
+      ],
+      "exit_code": 0,
+      "test_summaries": [
+        "Total tests: 4, passed: 4, failed: 0. [wasm]",
+        "Total tests: 4, passed: 4, failed: 0. [wasm-gc]",
+        "Total tests: 4, passed: 4, failed: 0. [js]",
+        "Total tests: 4, passed: 4, failed: 0. [native]"
+      ]
+    },
+    {
+      "check": "pipeline-render",
+      "cwd": ".",
+      "command": [
+        "moon",
+        "run",
+        "--target",
+        "native",
+        "./cmd"
+      ],
+      "exit_code": 0,
+      "test_summaries": []
+    }
+  ],
+  "negative_cli_cases": [
+    {
+      "case": "missing-schema",
+      "exit_code": 1,
+      "output_unchanged": true
+    },
+    {
+      "case": "unknown-imported-type",
+      "exit_code": 1,
+      "output_unchanged": true
+    },
+    {
+      "case": "cyclic-schema-import",
+      "exit_code": 1,
+      "output_unchanged": true
+    },
+    {
+      "case": "no-transitive-visibility",
+      "exit_code": 1,
+      "output_unchanged": true
+    },
+    {
+      "case": "unsupported-constraint",
+      "exit_code": 1,
+      "output_unchanged": true
+    }
+  ],
+  "pipeline": {
+    "status": "passed",
+    "output": "Order 42: MoonBit x3",
+    "inverse_restored": true
+  }
+}

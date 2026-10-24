@@ -1,0 +1,8 @@
+import {
+  "LL124-Arch/stencil-contract" @contract,
+  "LL124-Arch/ion-patch" @patch,
+  "LL124-Arch/amazon-ion-moonbit-core" @ion,
+  "LL124-Arch/amazon-ion-moonbit-core/format_model" @ion_model,
+  "LL124-Arch/stencil/src" @stencil,
+  "moonbitlang/core/bigint",
+}

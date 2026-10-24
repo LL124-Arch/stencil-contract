@@ -8,6 +8,27 @@ analysis. JSON Schema import supports the documented subset and returns an
 error for unsupported validation keywords instead of silently ignoring them.
 The project is licensed under Apache-2.0; see `LICENSE`.
 
+## 复审修订：可核查的契约终点与保义边界
+
+本仓库已修复 JSON Schema `integer` 被弱化为 `Number` 的问题。新增
+`parse_contract_json(text)` 和 `ContractSchema::from_json_schema_text(text)`，
+保留数值原文，以十进制 BigInt 运算判断整数、数值边界、倍数及枚举相等性。
+`1.0`、`1e3` 是整数，`1.0000000000000000000001` 不是整数；已被其他解析器
+舍弃的数字不能通过传入 `Json` 恢复。数字 token 最长 4096 字符，指数绝对值
+最多 4096，文本入口最大嵌套 128 层，重复 JSON 键显式拒绝。
+
+文本 Schema 入口采用保义子集：对象根、显式嵌套容器类型、可表示的属性路径、
+无环本地 JSON Pointer 引用及已列明的断言。它拒绝 `pattern` / `format`，
+避免把正则引擎差异或默认作为注解的 format 宣称为通用保义。
+原有 `from_json_schema(Json)` 仍提供下文注明的 MoonBit Regex 和格式断言扩展。
+两种入口均拒绝不支持的方言、外部/递归引用、`$ref` 验证兄弟关键字及无法保义的结构。
+
+[兼容性与保义矩阵](docs/COMPATIBILITY.md) 逐项说明 ISL、JSON Schema 和 Ion→JSON 的范围。
+[完整复现案例](integration/README.md) 实际运行
+**ISL 相对导入 → 生成并编译解码器 → Ion 补丁 → 再次按 ISL 校验 → 有边界的 JSON 投影 → 模板契约检查 → 渲染**，
+并测试坏数据在渲染前被拒绝、逆补丁恢复原值。该案例限定 Order 契约和受支持子集，
+不声称实现完整 ISL 2.0，也不将三个库的独立测试视为集成证明。
+
 ## Define a contract
 
 Schema paths use dots for object fields and repeat `[]` for each array level. For example, `matrix[][]` validates every value inside each inner array, while `matrix[][].name` validates a property on each object at that level. Declared parents must match the path structure (`Array` for each array level and `Object` before a nested field). `required` checks for a containing property and never requires arrays to be non-empty. Any undeclared sample fields are errors, including keys inside nested arrays. Use an `Any` declaration for an arbitrary value and its contents.
@@ -66,7 +87,7 @@ The importer flattens `properties`, `required`, primitive `type`, nested array
 `items`, boolean `additionalProperties`, `propertyNames`, and
 `dependentRequired` into the contract checks below.
 JSON Schema's default `additionalProperties: true` is preserved per object;
-`false` rejects undeclared keys. `integer` maps to `Number`. Acyclic local
+`false` rejects undeclared keys. `integer` maps to `Integer` and rejects fractional numeric values. Acyclic local
 JSON Pointer references into `$defs` or `definitions` are expanded at each
 use site, including references inside array `items`. Pointer tokens decode
 `~1` and `~0` for `/` and `~`. External or recursive references and validation
@@ -91,7 +112,11 @@ string `type`, `enum`, `const`, `pattern`, `format`, `minLength`, and
 `maxLength` assertions; a name failure points to that key's JSON Pointer.
 `dependentRequired` reports a missing dependent property only when its trigger
 property is present. The root remains subject to this checker's Object
-requirement.
+requirement. Declared `$schema` must be 2020-12. Nested structural schemas
+must explicitly specify `object` or `array`; the importer rejects implicit
+narrowing of otherwise valid scalar instances. Property names flattened into
+contract paths must be nonempty and contain no dot or square bracket. Use the
+compatibility matrix for exact reference, numeric and extension boundaries.
 
 ```moonbit
 let imported_schema = @contract.ContractSchema::from_json_schema({

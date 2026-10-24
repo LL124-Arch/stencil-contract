@@ -1,0 +1,6 @@
+members = [
+  "../../ion-patch",
+  "../../ion-schema-codegen",
+  "..",
+  ".",
+]

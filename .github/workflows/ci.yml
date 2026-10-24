@@ -12,3 +12,30 @@ jobs:
       - run: moon build
       - run: moon test --deny-warn --target all
       - run: moon run examples/contract_demo
+  compatibility-endpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: stencil-contract
+      - uses: actions/checkout@v4
+        with:
+          repository: LL124-Arch/ion-schema-codegen
+          ref: 558dc610cdbb559a1e46d4ee285a702b72dfc65b
+          path: ion-schema-codegen
+      - uses: actions/checkout@v4
+        with:
+          repository: LL124-Arch/ion-patch
+          ref: f956351ddbed8aa87b0895b68246b2c2308f80cb
+          path: ion-patch
+      - uses: hustcer/setup-moonbit@v1
+      - run: moon update
+        working-directory: stencil-contract
+      - run: moon update
+        working-directory: stencil-contract/integration
+      - run: python3 verify.py
+        working-directory: stencil-contract/integration
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compatibility-verification
+          path: stencil-contract/integration/verification.json
